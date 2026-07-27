@@ -1995,6 +1995,7 @@ public:
 #endif
 	{}
 
+#if defined(METAL) || defined(OPENCL) // Used for implementations 3 and 5; not supported by CUDA
 	inline DeviceBuffer makeDeviceBuffer(const size_t bytes, const UINT64_t flags, Status& status) {
 		DeviceBuffer buffer{};
 #if defined(METAL)
@@ -2053,12 +2054,11 @@ public:
 	}
 
 	inline Status finishDeviceQueue() {
-#if defined(METAL)
-        return SUCCESS_VALUE;
-#elif defined(OPENCL)
-        return CLCommandQueue[0].finish();
-#endif
+		Status status = SUCCESS_VALUE;
+		FINISH_QUEUE(status, "Queue finish failed\n", status);
+		return status;
 	}
+#endif
 
 #if defined(METAL)
 	NS::SharedPtr<MTL::Device> mtlDevice;
