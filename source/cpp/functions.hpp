@@ -74,7 +74,6 @@ inline void transferMetalToAF(const NS::SharedPtr<MTL::Buffer>& buffer,
 #define M_PI (3.14159265358979323846)
 #endif
 
-#pragma pack(1) 
 #pragma warning(disable : 4996)
 
 // This function sets the variables needed for the special large dimensional reconstruction method

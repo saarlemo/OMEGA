@@ -1391,8 +1391,24 @@ else % Apple silicon MATLAB/Octave
         error(['The metal-cpp single-header Metal.hpp file was not found. ' ...
             'Set METALCPP_INCLUDE_PATH to the folder containing Metal.hpp.'])
     end
-    ldflags = ['LDFLAGS="\$LDFLAGS -framework Metal -framework Foundation -Wl,-rpath,' af_path '/lib"'];
-    cxxflags = 'CXXFLAGS="\$CXXFLAGS -std=c++17 "';
+    deploymentFlag = '';
+    [otoolStatus, afBuildInfo] = system( ...
+        ['/usr/bin/otool -l "' af_path '/lib/libafmetal.dylib"']);
+    if otoolStatus == 0
+        minVersion = regexp(afBuildInfo, ...
+            '\n\s*minos\s+([0-9]+(?:\.[0-9]+){1,2})', 'tokens', 'once');
+        if isempty(minVersion)
+            minVersion = regexp(afBuildInfo, ...
+                '(?s)cmd LC_VERSION_MIN_MACOSX.*?version\s+([0-9]+(?:\.[0-9]+){1,2})', ...
+                'tokens', 'once');
+        end
+        if ~isempty(minVersion)
+            deploymentFlag = [' -mmacosx-version-min=' minVersion{1}];
+        end
+    end
+    ldflags = ['LDFLAGS="\$LDFLAGS -framework Metal -framework Foundation' ...
+        deploymentFlag ' -Wl,-rpath,' af_path '/lib"'];
+    cxxflags = ['CXXFLAGS="\$CXXFLAGS -std=c++17' deploymentFlag '"'];
     % Xcode 26 incorrectly adds the C++ MEX adapter exports to C-style MEX
     % entry points. Clearing LINKEXPORTCPP avoids those undefined symbols.
     % See https://se.mathworks.com/matlabcentral/answers/2180302-mex-failing-to-compile-function
