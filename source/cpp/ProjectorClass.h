@@ -799,13 +799,32 @@ class ProjectorClass {
 			mexPrint("Unable to create Metal image texture: missing input buffer");
 			return -1;
 		}
-		vec_opencl.d_image_os = createMetalFloatTextureFromBuffer(
-			vec_opencl.d_im,
-			metalTextureSpec(inputScalars.Nx[ii], inputScalars.Ny[ii], inputScalars.Nz[ii], true));
-		if (!vec_opencl.d_image_os) {
+		const MetalTextureSpec spec = metalTextureSpec(
+			inputScalars.Nx[ii], inputScalars.Ny[ii], inputScalars.Nz[ii], true);
+		const size_t volume = static_cast<size_t>(ii);
+		if (FPTexCache.size() <= volume) {
+			FPTexCache.resize(volume + 1);
+			imageCacheDims.resize((volume + 1) * 3, 0);
+		}
+		if (!FPTexCache[volume] ||
+			imageCacheDims[volume * 3] != spec.width ||
+			imageCacheDims[volume * 3 + 1] != spec.height ||
+			imageCacheDims[volume * 3 + 2] != spec.depth) {
+			FPTexCache[volume] = createMetalTexture(spec);
+			imageCacheDims[volume * 3] = spec.width;
+			imageCacheDims[volume * 3 + 1] = spec.height;
+			imageCacheDims[volume * 3 + 2] = spec.depth;
+		}
+		if (!FPTexCache[volume]) {
 			mexPrint("Unable to create Metal image texture");
 			return -1;
 		}
+		const MTL::Region textureRegion(0, 0, 0, spec.width, spec.height, spec.depth);
+		const NS::UInteger bytesPerRow = spec.width * spec.elementSize;
+		const NS::UInteger bytesPerImage = bytesPerRow * spec.height;
+		FPTexCache[volume]->replaceRegion(textureRegion, 0, 0,
+			vec_opencl.d_im->contents(), bytesPerRow, bytesPerImage);
+		vec_opencl.d_image_os = FPTexCache[volume];
 		return 0;
 	}
 #endif // END CUDA/METAL texture helpers
@@ -1977,6 +1996,7 @@ public:
 #endif
 	{}
 
+#if defined(METAL) || defined(OPENCL) // Used for implementations 3 and 5; not supported by CUDA
 	inline DeviceBuffer makeDeviceBuffer(const size_t bytes, const UINT64_t flags, Status& status) {
 		DeviceBuffer buffer{};
 #if defined(METAL)
@@ -2035,12 +2055,11 @@ public:
 	}
 
 	inline Status finishDeviceQueue() {
-#if defined(METAL)
-        return SUCCESS_VALUE;
-#elif defined(OPENCL)
-        return CLCommandQueue[0].finish();
-#endif
+		Status status = SUCCESS_VALUE;
+		FINISH_QUEUE(status, "Queue finish failed\n", status);
+		return status;
 	}
+#endif
 
 #if defined(METAL)
 	NS::SharedPtr<MTL::Device> mtlDevice;
@@ -2143,6 +2162,9 @@ public:
 	// execute their own command buffers in submission order.
 	std::vector<NS::SharedPtr<MTL::CommandQueue>> sideQueues;
 	std::vector<NS::SharedPtr<MTL::CommandBuffer>> sideCommandBuffers;
+	// Persistent per-volume FP input textures, refreshed from the current
+	// ArrayFire image estimate before every forward projection.
+	std::vector<Texture3D> FPTexCache;
 #elif defined(OPENCL)
 	std::vector<cl::CommandQueue> sideQueues;
 	// Persistent per-volume FP input images
@@ -4207,7 +4229,10 @@ public:
 			}
 				else {
 #if defined(METAL)
-					if (!vec_opencl.d_image_os && updateMetalImageTextureFromBuffer(inputScalars, ii) != 0) {
+					// The ArrayFire image estimate changes after every subset and
+					// d_im also changes between multiresolution volumes. Refresh
+					// the Metal texture for every forward projection.
+					if (updateMetalImageTextureFromBuffer(inputScalars, ii) != 0) {
 						encoder->endEncoding();
 						return -1;
 					}
@@ -4538,7 +4563,15 @@ public:
 			}
 #if defined(METAL)
 			KARG_METAL_SLOT(kernelIndBPSubIter, 12);
-			KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[uu]);
+			// The kernel signature always includes the sensitivity buffer, but
+			// no_norm guarantees that it is not accessed. Bind the current
+			// per-volume RHS buffer in that case instead of a dummy allocation.
+			// This also avoids an invalid Metal buffer binding for auxiliary
+			// multiresolution volumes in PDHG's power method.
+			const DeviceBuffer& sensitivityBuffer = no_norm == 0
+				? d_Summ[uu]
+				: vec_opencl.d_rhs_os[uu];
+			KARG(kTemp, kernelBP, kernelIndBPSubIter, sensitivityBuffer);
 #elif defined(CUDA) || defined(HIP)
 			KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[uu]);
 #elif defined(OPENCL)

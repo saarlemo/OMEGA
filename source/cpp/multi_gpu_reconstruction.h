@@ -66,7 +66,7 @@ inline void reconstruction_multigpu(const float* z_det, const float* x, scalarSt
 	if (status != 0)
 		return;
 
-#ifndef METAL // OMEGA does not have support for Metal textures
+#ifndef METAL
 	cl::detail::size_t_array region = { { 0, 0, 0 } };
 #else
     NS::SharedPtr<MTL::TextureDescriptor> pTextureDesc = NS::TransferPtr(MTL::TextureDescriptor::alloc()->init());

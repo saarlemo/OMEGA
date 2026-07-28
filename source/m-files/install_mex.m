@@ -1391,49 +1391,24 @@ else % Apple silicon MATLAB/Octave
         error(['The metal-cpp single-header Metal.hpp file was not found. ' ...
             'Set METALCPP_INCLUDE_PATH to the folder containing Metal.hpp.'])
     end
-    ldflags = ['LDFLAGS="\$LDFLAGS -framework Metal -framework Foundation -Wl,-rpath,' af_path '/lib"'];
-    cxxflags = 'CXXFLAGS="\$CXXFLAGS -std=c++17 "';
-    arrayFireDeploymentFlag = '';
-    afMetalLibrary = [af_path '/lib/libafmetal.dylib'];
-    if exist(afMetalLibrary, 'file') == 2
-        [otoolStatus, otoolOutput] = system(['otool -l "' afMetalLibrary '"']);
-        if otoolStatus == 0
-            dylibTargetMatch = regexp(otoolOutput, '\n\s*minos\s+([0-9.]+)', 'tokens', 'once');
-            if ~isempty(dylibTargetMatch)
-                dylibTarget = dylibTargetMatch{1};
-                compilerTarget = '';
-                if exist('OCTAVE_VERSION', 'builtin') ~= 5
-                    try
-                        compilerConfig = mex.getCompilerConfigurations('C++', 'Selected');
-                        compilerTargetMatch = regexp(compilerConfig.Details.LinkerFlags, ...
-                            '-mmacosx-version-min=([0-9.]+)', 'tokens', 'once');
-                        if ~isempty(compilerTargetMatch)
-                            compilerTarget = compilerTargetMatch{1};
-                        end
-                    catch
-                        % Older MATLAB versions may not expose compiler details.
-                    end
-                else
-                    compilerTarget = getenv('MACOSX_DEPLOYMENT_TARGET');
-                end
-
-                dylibParts = zeros(1, 3);
-                parsedParts = sscanf(dylibTarget, '%d.%d.%d').';
-                dylibParts(1:numel(parsedParts)) = parsedParts;
-                compilerParts = zeros(1, 3);
-                parsedParts = sscanf(compilerTarget, '%d.%d.%d').';
-                compilerParts(1:numel(parsedParts)) = parsedParts;
-                firstDifference = find(dylibParts ~= compilerParts, 1);
-                if isempty(compilerTarget) || (~isempty(firstDifference) && ...
-                        dylibParts(firstDifference) > compilerParts(firstDifference))
-                    arrayFireDeploymentFlag = [' -mmacosx-version-min=' dylibTarget];
-                end
-            end
+    deploymentFlag = '';
+    [otoolStatus, afBuildInfo] = system( ...
+        ['/usr/bin/otool -l "' af_path '/lib/libafmetal.dylib"']);
+    if otoolStatus == 0
+        minVersion = regexp(afBuildInfo, ...
+            '\n\s*minos\s+([0-9]+(?:\.[0-9]+){1,2})', 'tokens', 'once');
+        if isempty(minVersion)
+            minVersion = regexp(afBuildInfo, ...
+                '(?s)cmd LC_VERSION_MIN_MACOSX.*?version\s+([0-9]+(?:\.[0-9]+){1,2})', ...
+                'tokens', 'once');
+        end
+        if ~isempty(minVersion)
+            deploymentFlag = [' -mmacosx-version-min=' minVersion{1}];
         end
     end
-    arrayFireLdflags = ['LDFLAGS="\$LDFLAGS' arrayFireDeploymentFlag ...
-        ' -framework Metal -framework Foundation -Wl,-rpath,' af_path '/lib"'];
-    arrayFireCxxflags = ['CXXFLAGS="\$CXXFLAGS -std=c++17' arrayFireDeploymentFlag ' "'];
+    ldflags = ['LDFLAGS="\$LDFLAGS -framework Metal -framework Foundation' ...
+        deploymentFlag ' -Wl,-rpath,' af_path '/lib"'];
+    cxxflags = ['CXXFLAGS="\$CXXFLAGS -std=c++17' deploymentFlag '"'];
     % Xcode 26 incorrectly adds the C++ MEX adapter exports to C-style MEX
     % entry points. Clearing LINKEXPORTCPP avoids those undefined symbols.
     % See https://se.mathworks.com/matlabcentral/answers/2180302-mex-failing-to-compile-function
@@ -1451,7 +1426,7 @@ else % Apple silicon MATLAB/Octave
         try
             disp('Building ArrayFire_OpenCL_device_info.cpp for Metal')
             mex(compiler, complexFlag, '-outdir', folder, ...
-                '-output', 'ArrayFire_OpenCL_device_info', arrayFireLdflags, arrayFireCxxflags, ...
+                '-output', 'ArrayFire_OpenCL_device_info', ldflags, cxxflags, ...
                 'LINKEXPORTCPP=', ...
                 '-DMATLAB', '-DMETAL', ['-I' metalcpp_include_path], ...
                 ['-I' af_path_include], ...
@@ -1460,7 +1435,7 @@ else % Apple silicon MATLAB/Octave
             for kk = 1:numel(variantOutputs)
                 disp(variantMessages{kk})
                 mex(compiler, complexFlag, '-outdir', folder, ...
-                    '-output', variantOutputs{kk}, arrayFireLdflags, arrayFireCxxflags, ...
+                    '-output', variantOutputs{kk}, ldflags, cxxflags, ...
                     'LINKEXPORTCPP=', ...
                     '-DMATLAB', '-DMETAL', '-DAF', variantFlags{kk}{:}, ...
                     ['-I' folder], ['-I' metalcpp_include_path], ...
