@@ -265,6 +265,7 @@ void vectorMult(const CLGLOBAL float* input, CLGLOBAL float* output) {
 // Complex elementwise multiplication
 // Used by the filtering
 // This kernel assumes that the imaginary element is right after the real element, i.e. [real,imaginary,real,imaginary,...]
+#if !defined(METAL)
 KERN
 void vectorElementMultiply(const CLGLOBAL float* CLRESTRICT input, CLGLOBAL float* output, const uchar D2) {
 	const LTYPE3 xyz = MINT3(GID0, GID1, GID2);
@@ -292,6 +293,7 @@ void vectorElementDivision(const CLGLOBAL float* CLRESTRICT input, CLGLOBAL floa
 	output[2 * n] /= div;
 	output[2 * n + 1] /= div;
 }
+#endif
 
 // Non-local means
 #ifdef NLM_ // START NLM
@@ -2031,13 +2033,31 @@ void PoissonUpdate(CLGLOBAL float* CLRESTRICT im, const CLGLOBAL float* CLRESTRI
 // Different variations for subset and non-subset versions
 #if defined(PDHG)
 KERNEL3
-void PDHGUpdate(CLGLOBAL float* CLRESTRICT im, const CLGLOBAL float* CLRESTRICT rhs, CLGLOBAL float* CLRESTRICT u,
-	const int3 N, const float epps, const float theta, const float tau, const uchar enforcePositivity) {
+void PDHGUpdate(
+	CLGLOBAL float* CLRESTRICT im BUF0,
+	const CLGLOBAL float* CLRESTRICT rhs BUF1,
+	CLGLOBAL float* CLRESTRICT u BUF2,
+#ifdef METAL
+	SCALAR_PARAMS(scalarParams) BUF3,
+	uint3 metalGlobalId [[thread_position_in_grid]]
+#else
+	const int3 N,
+	const float epps,
+	const float theta,
+	const float tau,
+	const uchar enforcePositivity
+#endif
+) {
+#ifdef METAL
+	UNPACK_SCALAR_PARAMS_PDHG(scalarParams)
+	LTYPE3 xyz = MINT3(metalGlobalId.x, metalGlobalId.y, metalGlobalId.z);
+#else
 	LTYPE3 xyz = MINT3(GID0, GID1, GID2);
+#endif
 #if defined(CUDA) || defined(HIP)
 	if (xyz.x >= N.x || xyz.y >= N.y || xyz.z >= N.z)
 #else
-	if (any(xyz >= N))
+	if (ANY(xyz >= N))
 #endif
 		return;
 	const LTYPE n = (xyz.x) + (xyz.y) * (N.x) + (xyz.z) * (N.x * N.y);
@@ -2045,14 +2065,14 @@ void PDHGUpdate(CLGLOBAL float* CLRESTRICT im, const CLGLOBAL float* CLRESTRICT 
 	float imApu = im[n];
 	imApu -= tau * rhs[n];
 	if (enforcePositivity)
-		imApu = fmax(epps, imApu);
+		imApu = FMAX(epps, imApu);
 	im[n] = imApu;
 #else
 	const float uPrev = u[n];
 	float uNew = uPrev;
 	uNew -= tau * rhs[n];
 	if (enforcePositivity)
-		uNew = fmax(epps, uNew);
+		uNew = FMAX(epps, uNew);
 	u[n] = uNew;
 	im[n] = uNew + theta * (uNew - uPrev);
 #endif

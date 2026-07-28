@@ -955,10 +955,9 @@ inline int finalizeBackwardProjectionAF(AF_im_vectors& vec, const scalarStruct& 
 	return 0;
 }
 
-// The current Metal projector library contains the forward/backprojector
-// kernels. Auxiliary projector-side prior kernels are not part of that
-// library yet; keep their API available so the common reconstruction driver
-// compiles and reports an unsupported selection cleanly if requested.
+// Metal does not yet expose the auxiliary projector-side prior kernels
+// other than PDHG. Keep their API available so the common reconstruction
+// driver reports an unsupported selection cleanly.
 #ifdef METAL
 inline int MRPAF(af::array&, af::array&, const scalarStruct&, ProjectorClass&, const uint32_t, const uint32_t, const uint32_t) { return -1; }
 inline int NLMAF(af::array&, const af::array&, const scalarStruct&, Weighting&, ProjectorClass&, const float, const int = 0) { return -1; }
@@ -978,7 +977,6 @@ inline int proxTGVDivAF(const std::vector<af::array>&, std::vector<af::array>&, 
 	const float, const float, ProjectorClass&) { return -1; }
 inline int elementWiseAF(const af::array&, af::array&, const bool, ProjectorClass&, const bool = false) { return -1; }
 inline int poissonUpdateAF(af::array&, const af::array&, const scalarStruct&, const float, const float, const float, ProjectorClass&, const int = 0) { return -1; }
-inline int PDHGUpdateAF(af::array&, const af::array&, const scalarStruct&, AF_im_vectors&, const float, const float, const float, ProjectorClass&, const uint32_t, const int = 0) { return -1; }
 inline int rotateCustomAF(af::array&, const af::array&, const scalarStruct&, ProjectorClass&, const float, const int = 0) { return -1; }
 #else
 
@@ -1638,13 +1636,24 @@ inline int poissonUpdateAF(af::array& im, const af::array& rhs, const scalarStru
 	return status;
 }
 
+#endif
+#endif
+
 // Same as above, but for PDHG
+#ifndef CPU
 inline int PDHGUpdateAF(af::array& im, const af::array& rhs, const scalarStruct& inputScalars, AF_im_vectors& vec, const float epps, const float theta, const float tau, ProjectorClass& proj, const uint32_t timestep, const int ii = 0) {
 	int status = 0;
 	proj.d_im = transferAF(im);
 	proj.d_rhs = transferAF(rhs);
 	proj.d_U = transferAF(vec.uCP[timestep][ii]);
 	status = proj.PDHGUpdate(inputScalars, epps, theta, tau, ii);
+#ifdef METAL
+	if (status == 0) {
+		transferMetalToAF(proj.d_im, im);
+		if (inputScalars.subsetsUsed <= 1)
+			transferMetalToAF(proj.d_U, vec.uCP[timestep][ii]);
+	}
+#endif
 	rhs.unlock();
 	im.unlock();
 	vec.uCP[timestep][ii].unlock();
@@ -1653,7 +1662,9 @@ inline int PDHGUpdateAF(af::array& im, const af::array& rhs, const scalarStruct&
 	}
 	return status;
 }
+#endif
 
+#if !defined(METAL) && !defined(CPU)
 inline int rotateCustomAF(af::array& imrot, const af::array& im, const scalarStruct& inputScalars, ProjectorClass& proj, const float angle, const int ii = 0) {
 	int status = 0;
 	if (!inputScalars.useBuffers) {
@@ -1683,7 +1694,6 @@ inline int rotateCustomAF(af::array& imrot, const af::array& im, const scalarStr
 	}
 	return status;
 }
-#endif
 #endif
 
 // Various batch functions

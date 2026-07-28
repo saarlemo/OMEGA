@@ -177,6 +177,13 @@
     const float3 d_scale = scalarParams.d_Scale5; \
     const long d_nProjections = scalarParams.nProjections;
 
+#define UNPACK_SCALAR_PARAMS_PDHG(scalarParams) \
+    const int3 N = scalarParams.N_PDHG; \
+    const float epps = scalarParams.epps_PDHG; \
+    const float theta = scalarParams.theta_PDHG; \
+    const float tau = scalarParams.tau_PDHG; \
+    const uchar enforcePositivity = scalarParams.enforcePositivity_PDHG;
+
 
 #ifdef METAL
 

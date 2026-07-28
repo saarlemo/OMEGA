@@ -355,6 +355,11 @@ inline void metalSetKernelArg(const NS::SharedPtr<MTL::ComputeCommandEncoder>& e
 	encoder->setTexture(texture.get(), static_cast<NS::UInteger>(index++));
 }
 
+template <typename T>
+inline void metalSetKernelArg(const NS::SharedPtr<MTL::ComputeCommandEncoder>& encoder, UINT32_t& index, const T& value) {
+	encoder->setBytes(&value, static_cast<NS::UInteger>(sizeof(T)), static_cast<NS::UInteger>(index++));
+}
+
 inline NS::SharedPtr<NS::Dictionary> makeMetalPreprocessorMacros(const std::vector<std::string>& options) {
 	std::vector<NS::Object*> keys;
 	std::vector<NS::Object*> values;
@@ -1520,8 +1525,16 @@ class ProjectorClass {
 			if (status == NVRTC_SUCCESS)
 				memAlloc.auxMod = true;
 #elif defined(METAL)
-			programAux = nullptr;
-			status = SUCCESS_VALUE;
+			if (MethodList.CPType) {
+				status = buildProgram(inputScalars.verbose, contentAux, programAux, optionsAux);
+				if (status != SUCCESS_VALUE)
+					return status;
+				memAlloc.auxMod = true;
+			}
+			else {
+				programAux = nullptr;
+				status = SUCCESS_VALUE;
+			}
 #elif defined(OPENCL)
 			status = buildProgram(inputScalars.verbose, contentAux, CLContext, CLDeviceID, programAux, inputScalars.atomic_64bit, inputScalars.atomic_32bit, optionsAux);
 #endif // END CUDA
@@ -1895,12 +1908,14 @@ class ProjectorClass {
 				mexPrint("Poisson Update kernel successfully created\n");
 			}
 		}
+#endif // END non-Metal auxiliary kernel creation
 		if (MethodList.CPType) {
 			CREATE_KERNEL(kernelPDHG, programAux, "PDHGUpdate", "Failed to create PDHG Update kernel\n");
 			if (DEBUG || inputScalars.verbose >= 3) {
 				mexPrint("PDHG Update kernel successfully created\n");
 			}
 		}
+#if !defined(METAL)
 		if (MethodList.ProxTV) {
 			GET_KERNEL(kernelProxTVq, programAux, "ProxTVq");
 			GET_KERNEL(kernelProxTVDiv, programAux, "ProxTVDivergence");
@@ -6481,9 +6496,10 @@ public:
 		return 0;
 	}
 
+#endif // END non-Metal auxiliary kernels
 #if defined(CUDA) || defined(HIP)
 	inline int PDHGUpdate(const scalarStruct & inputScalars, float epps, float theta, float tau, const int ii = 0) {
-#elif defined(OPENCL)
+#elif defined(OPENCL) || defined(METAL)
 	inline int PDHGUpdate(const scalarStruct & inputScalars, const float epps, const float theta, const float tau, const int ii = 0) {
 #endif // END CUDA
 		if (inputScalars.verbose >= 3)
@@ -6495,9 +6511,22 @@ public:
 		}
 #if defined(CUDA) || defined(HIP)
 		std::vector<void*> kArgs;
-#elif defined(OPENCL)
+#elif defined(OPENCL) || defined(METAL)
 		UINT32_t kernelIndPDHG = 0U;
 #endif // END CUDA
+#if defined(METAL)
+		if (!queueBP || !kernelPDHG) {
+			mexPrint("Unable to create Metal PDHG update encoder");
+			return -1;
+		}
+		NS::SharedPtr<MTL::CommandBuffer> commandBuffer = NS::RetainPtr(queueBP->commandBuffer());
+		NS::SharedPtr<MTL::ComputeCommandEncoder> encoder = NS::RetainPtr(commandBuffer->computeCommandEncoder());
+		if (!commandBuffer || !encoder) {
+			mexPrint("Unable to create Metal PDHG update encoder");
+			return -1;
+		}
+		encoder->setComputePipelineState(kernelPDHG.get());
+#endif
 		FINISH_QUEUE(status, "\n", -1);
 		SET_LAUNCH_RANGE3(global,
 			inputScalars.Nx[ii] + erotusPDHG[0][ii],
@@ -6519,17 +6548,43 @@ public:
 		KARG(kArgs, kernelPDHG, kernelIndPDHG, d_im);
 		KARG(kArgs, kernelPDHG, kernelIndPDHG, d_rhs);
 		KARG(kArgs, kernelPDHG, kernelIndPDHG, d_U);
+#if defined(METAL)
+		kParams.N_PDHG = { static_cast<int>(VEC_X(d_N[ii])), static_cast<int>(VEC_Y(d_N[ii])), static_cast<int>(VEC_Z(d_N[ii])) };
+		kParams.epps_PDHG = epps;
+		kParams.theta_PDHG = theta;
+		kParams.tau_PDHG = tau;
+		kParams.enforcePositivity_PDHG = enforcePositivity;
+		KARG(kArgs, kernelPDHG, kernelIndPDHG, kParams);
+#else
 		KARG(kArgs, kernelPDHG, kernelIndPDHG, d_N[ii]);
 		KARG(kArgs, kernelPDHG, kernelIndPDHG, epps);
 		KARG(kArgs, kernelPDHG, kernelIndPDHG, theta);
 		KARG(kArgs, kernelPDHG, kernelIndPDHG, tau);
 		KARG(kArgs, kernelPDHG, kernelIndPDHG, enforcePositivity);
+#endif
 		// Compute the kernel
 		if (DEBUG || inputScalars.verbose >= 3)
 			START_TIMER(tStart);
 #if defined(CUDA) || defined(HIP)
 		status = cuLaunchKernel(kernelPDHG, global[0], global[1], global[2], localPrior[0], localPrior[1], localPrior[2], 0, CLCommandQueue[0], kArgs.data(), NULL);
 		CUDA_CHECK(status, "Failed to launch the PDHG update kernel\n", -1);
+#elif defined(METAL)
+		{
+			const MTL::Size threadsPerThreadgroup = MTL::Size::Make(localPrior[0], localPrior[1], localPrior[2]);
+			const MTL::Size threadgroupsPerGrid = MTL::Size::Make(
+				global[0] / localPrior[0], global[1] / localPrior[1], global[2] / localPrior[2]);
+			encoder->dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup);
+			encoder->endEncoding();
+			commandBuffer->commit();
+			commandBuffer->waitUntilCompleted();
+			if (commandBuffer->status() == MTL::CommandBufferStatusError) {
+				NS::Error* error = commandBuffer->error();
+				const char* message = error && error->localizedDescription()
+					? error->localizedDescription()->utf8String() : "unknown Metal error";
+				mexPrintBase("Metal PDHG update failed: %s\n", message);
+				return -1;
+			}
+		}
 #elif defined(OPENCL)
 		status = (CLCommandQueue[0]).enqueueNDRangeKernel(kernelPDHG, cl::NullRange, global, localPrior);
 		OCL_CHECK(status, "Failed to launch the PDHG update kernel\n", -1);
@@ -6542,6 +6597,7 @@ public:
 		return 0;
 	}
 
+#if !defined(METAL)
 #if defined(CUDA) || defined(HIP)
 	inline int rotateCustom(const scalarStruct & inputScalars, float cosa, float sina, const int ii = 0) {
 #elif defined(OPENCL)

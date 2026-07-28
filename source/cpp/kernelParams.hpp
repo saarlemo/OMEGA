@@ -82,6 +82,12 @@ struct ScalarKernelParams { // Kernel scalar values that do not change with time
     CL_UINT64 m_size;
     CL_UINT32 currentSubset;
     CL_INT32 aa;
+    // Below parameters are used in PDHG update kernel
+    CL_INT3 N_PDHG;
+    float epps_PDHG;
+    float theta_PDHG;
+    float tau_PDHG;
+    CL_UINT8 enforcePositivity_PDHG;
 };
 
 #undef CL_FLOAT2
