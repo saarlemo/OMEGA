@@ -795,7 +795,12 @@ class ProjectorClass {
 
 	inline int updateMetalImageTextureFromBuffer(const scalarStruct& inputScalars, const int ii) {
 		if (!vec_opencl.d_im || !vec_opencl.d_im->contents()) {
-			mexPrint("Unable to create Metal image texture: missing input buffer");
+			// Standalone projector calls upload image-mode input directly into
+			// d_image_os. ArrayFire calls instead provide d_im and require the
+			// cached texture to be refreshed below after every subset/volume.
+			if (vec_opencl.d_image_os)
+				return 0;
+			mexPrint("Unable to create Metal image texture: missing input buffer and texture");
 			return -1;
 		}
 		const MetalTextureSpec spec = metalTextureSpec(

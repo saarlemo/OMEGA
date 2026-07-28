@@ -343,6 +343,10 @@ inline void reconstruction_multigpu(const float* z_det, const float* x, scalarSt
                             status = proj.CLCommandQueue[0].enqueueWriteImage(proj.vec_opencl.d_image_os, CL_FALSE, proj.origin, region, 0, 0, &im[uu]);
                             CHECK(status, "\n", );
     #else
+                            // Standalone image-mode input is uploaded directly to a Metal
+                            // texture. Clear any staging buffer so forwardProjection keeps
+                            // this texture instead of trying to refresh it from stale data.
+                            proj.vec_opencl.d_im.reset();
 	                            pTextureDesc->setWidth(region[0]);
 	                            pTextureDesc->setHeight(region[1]);
 	                            pTextureDesc->setDepth(region[2]);
