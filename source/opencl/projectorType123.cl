@@ -545,7 +545,13 @@ void projectorType123(
 			if (localTmax >= localTmin) {
 				temp = FLOAT_ONE;
 #if defined(TOTLENGTH)
-				temp /= FMAX(L * totalTmax, 1.0e-6f);
+				// getDetectorCoordinatesSPECT() extends the ray to the total
+				// FOV before L is computed.  The support-expanded interval is
+				// only for finding voxels whose Gaussian support overlaps the
+				// current volume; including totalTmax here would normalize by
+				// a longer, artificial ray and would scale each resolution
+				// volume differently.
+				temp /= FMAX(L, 1.0e-6f);
 #endif
 				temp *= d_d.x * d_d.y * d_d.z;
 #ifdef NORM
