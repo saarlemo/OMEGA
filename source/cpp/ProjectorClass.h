@@ -1567,6 +1567,7 @@ class ProjectorClass {
 		}
 		NS::Error* err = nullptr;
 		NS::SharedPtr<MTL::CompileOptions> compileOptions = NS::TransferPtr(MTL::CompileOptions::alloc()->init());
+		compileOptions->setMathMode(std::find(options.begin(), options.end(), "-DUSEMAD") != options.end() ? MTL::MathModeFast : MTL::MathModeRelaxed);
 		NS::SharedPtr<NS::Dictionary> macros = makeMetalPreprocessorMacros(options);
 		compileOptions->setPreprocessorMacros(macros.get());
 		program = NS::TransferPtr(mtlDevice->newLibrary(
