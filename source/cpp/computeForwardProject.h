@@ -67,7 +67,6 @@ inline int computeForwardStep(const RecMethods& MethodList, af::array& y, af::ar
 				input += af::tile(randomsData, inputScalars.nBins);
 			else
 				input += randomsData;
-			input.eval();
 		}
 	}
 	if (MethodList.CPType && inputScalars.subsetsUsed > 1) {
@@ -93,7 +92,6 @@ inline int computeForwardStep(const RecMethods& MethodList, af::array& y, af::ar
 				mexPrint("PET/SPECT mode");
 			input = y.as(f32) / (input);
 		}
-		input.eval();
 	}
 	else if (MethodList.RAMLA || MethodList.BSREM || MethodList.RBI || MethodList.RBIOSL || MethodList.DRAMA) {
 		if (inputScalars.verbose >= 3)
@@ -119,7 +117,6 @@ inline int computeForwardStep(const RecMethods& MethodList, af::array& y, af::ar
 			else
 				input = y.as(f32) / (input) - 1.f;
 		}
-		input.eval();
 	}
 	else if (MethodList.PKMA) {
 		if (inputScalars.verbose >= 3)
@@ -145,7 +142,6 @@ inline int computeForwardStep(const RecMethods& MethodList, af::array& y, af::ar
 			else
 				input = 1.f - y.as(f32) / (input);
 		}
-		input.eval();
 		status = applyMeasPreconditioning(w_vec, inputScalars, input, proj, timestep, subIter);
 		if (status != 0)
 			return -1;
@@ -179,7 +175,6 @@ inline int computeForwardStep(const RecMethods& MethodList, af::array& y, af::ar
 				else
 					input = y.as(f32) / (input) - 1.f;
 		}
-		input.eval();
 		status = applyMeasPreconditioning(w_vec, inputScalars, input, proj, timestep, subIter);
 		if (status != 0)
 			return -1;
@@ -190,9 +185,7 @@ inline int computeForwardStep(const RecMethods& MethodList, af::array& y, af::ar
 		input -= w_vec.alphaLSQR[timestep] * y.as(f32);
 		w_vec.betaLSQR[timestep] = af::norm(input);
 		input = input / w_vec.betaLSQR[timestep];
-		input.eval();
-		y = input;
-		y.eval();
+		y = input.copy();
 	}
 	else if (MethodList.CGLS) {
 		if (inputScalars.verbose >= 3)
@@ -200,15 +193,12 @@ inline int computeForwardStep(const RecMethods& MethodList, af::array& y, af::ar
 		const float normi = af::norm(input);
 		w_vec.alphaCGLS = w_vec.gammaCGLS / (normi * normi);
 		input = vec.rCGLS - w_vec.alphaCGLS * input;
-		input.eval();
-		vec.rCGLS = input;
-		vec.rCGLS.eval();
+		vec.rCGLS = input.copy();
 	}
 	else if (MethodList.BB) {
 		if (inputScalars.verbose >= 3)
 			mexPrint("Computing BB");
 		input -= y.as(f32);
-		input.eval();
 	}
 	else if (MethodList.SART || MethodList.POCS) {
 		if (inputScalars.verbose >= 3)
@@ -222,7 +212,6 @@ inline int computeForwardStep(const RecMethods& MethodList, af::array& y, af::ar
 			residual[kk] = residual[kk] * residual[kk] * .5f;
 		}
 		input /= w_vec.M[timestep][subIter];
-		input.eval();
 	}
 	else if (MethodList.PDHG || MethodList.PDDY) {
 		if (inputScalars.verbose >= 3)
@@ -289,7 +278,6 @@ inline int computeForwardStep(const RecMethods& MethodList, af::array& y, af::ar
 				}
 				input = (vec.pCP[timestep][subIter] + w_vec.sigmaCP[timestep][ii] * res);
 			}
-			input.eval();
 		}
 		else {
 			if (MethodList.ProxTGV) {
@@ -302,7 +290,6 @@ inline int computeForwardStep(const RecMethods& MethodList, af::array& y, af::ar
 					mexPrint("Computing PDHG");
 				input = (vec.pCP[timestep][subIter] + w_vec.sigmaCP[timestep][ii] * res) / (1.f + w_vec.sigmaCP[timestep][ii]);
 			}
-			input.eval();
 		}
 		if (inputScalars.storeResidual) {
 			const float normi = static_cast<float>(af::norm(vec.pCP[timestep][subIter]));
@@ -338,7 +325,6 @@ inline int computeForwardStep(const RecMethods& MethodList, af::array& y, af::ar
 		}
 		else
 			input = .5f * (1.f + vec.pCP[timestep][subIter] + w_vec.sigmaCP[timestep][ii] * input - af::sqrt(af::pow(vec.pCP[timestep][subIter] + w_vec.sigmaCP[timestep][ii] * input - 1.f, 2.) + 4.f * w_vec.sigmaCP[timestep][ii] * y.as(f32)));
-		input.eval();
 		vec.pCP[timestep][subIter] = input.copy();
 	}
 	else if (MethodList.PDHGL1) {
@@ -350,7 +336,6 @@ inline int computeForwardStep(const RecMethods& MethodList, af::array& y, af::ar
 			return -1;
 		input = (vec.pCP[timestep][subIter] + w_vec.sigmaCP[timestep][ii] * res);
 		input /= (af::max)(1.f, af::abs(input));
-		input.eval();
 		vec.pCP[timestep][subIter] = input.copy();
 	}
 	else if (MethodList.SAGA) {
@@ -374,7 +359,6 @@ inline int computeForwardStep(const RecMethods& MethodList, af::array& y, af::ar
 				mexPrint("PET/SPECT mode");
 			input = y.as(f32) / (input) - 1.f;
 		}
-		input.eval();
 		status = applyMeasPreconditioning(w_vec, inputScalars, input, proj, timestep, subIter);
 		if (status != 0)
 			return -1;
@@ -383,7 +367,6 @@ inline int computeForwardStep(const RecMethods& MethodList, af::array& y, af::ar
 		if (inputScalars.verbose >= 3)
 			mexPrint("Computing PDHG with subsets");
 		input -= vec.p0CP[timestep];
-		input.eval();
 	}
 	if (MethodList.FISTA || MethodList.FISTAL1) {
 		if (inputScalars.verbose >= 3)
