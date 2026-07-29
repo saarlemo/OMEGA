@@ -45,7 +45,7 @@ inline void reconstruction_multigpu(const float* z_det, const float* x, scalarSt
 		length[kk] = pituus[kk + 1u] - pituus[kk];
 	uint64_t m_size = length[inputScalars.osa_iter0];
 	if (DEBUG) mexPrint("Adding projector");
-	Status status = SUCCESS_VALUE;
+	STATUS_t status = SUCCESS_VALUE;
 
 	ProjectorClass proj;
 	status = proj.addProjector(inputScalars, w_vec, MethodList, header_directory, type);
