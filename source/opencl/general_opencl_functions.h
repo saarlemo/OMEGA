@@ -312,6 +312,8 @@ constexpr metal::sampler samplerMask(
 #define MUINT3(a, b, c) uint3(a, b, c)
 #define NORMALIZE metal::normalize
 #define POWR metal::pow
+#define SINF(a) metal::sin(a)
+#define COSF(a) metal::cos(a)
 #define PTR_DEV device
 #define PTR_THR thread
 #define PTR_CONST constant
