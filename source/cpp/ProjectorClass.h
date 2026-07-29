@@ -3970,6 +3970,12 @@ public:
 		}
 		if (inputScalars.FPType == 4) {
 			KARG_METAL_SLOT(kernelIndFPSubIter, 3);
+#ifdef METAL
+			if (updateMetalImageTextureFromBuffer(inputScalars, ii) != 0) {
+				encoder->endEncoding();
+				return -1;
+			}
+#endif
 			KARG(kTemp, kernelFP, kernelIndFPSubIter, vec_opencl.d_image_os);
 			KARG(kTemp, kernelFP, kernelIndFPSubIter, d_output);
 			if (((inputScalars.listmode == 0 || inputScalars.indexBased) && !(inputScalars.CT || inputScalars.SPECT)) || (!inputScalars.loadTOF && inputScalars.listmode > 0)) {
