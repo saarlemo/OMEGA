@@ -258,8 +258,22 @@ using TimerPoint = std::chrono::steady_clock::time_point;
 	status = (TEX).get() ? SUCCESS_VALUE : -1; \
 } while(0)
 #define CREATE_FLOAT_TEXTURE3D_FROM_DEVICE(TEX, ARRAY, SRC, HEIGHT, WIDTH, DEPTH, FILTER, FLAGS) do { \
-	(TEX) = createMetalFloatTextureFromBuffer((SRC), metalTextureSpec((WIDTH), (HEIGHT), (DEPTH), true)); \
-	status = (TEX).get() ? SUCCESS_VALUE : -1; \
+	const auto textureSpec = metalTextureSpec((WIDTH), (HEIGHT), (DEPTH), true); \
+	if (!(SRC) || !(SRC)->contents()) { \
+		status = -1; \
+	} else { \
+		if (!(TEX) || (TEX)->width() != textureSpec.width || (TEX)->height() != textureSpec.height || (TEX)->depth() != textureSpec.depth) \
+			(TEX) = createMetalFloatTextureEmpty(textureSpec); \
+		if (!(TEX)) { \
+			status = -1; \
+		} else { \
+			const MTL::Region textureRegion(0, 0, 0, textureSpec.width, textureSpec.height, textureSpec.depth); \
+			const NS::UInteger bytesPerRow = textureSpec.width * textureSpec.elementSize; \
+			const NS::UInteger bytesPerImage = bytesPerRow * textureSpec.height; \
+			(TEX)->replaceRegion(textureRegion, 0, 0, (SRC)->contents(), bytesPerRow, bytesPerImage); \
+			status = SUCCESS_VALUE; \
+		} \
+	} \
 } while(0)
 #define CREATE_FLOAT_TEXTURE3D_EMPTY(TEX, ARRAY, WIDTH, HEIGHT, DEPTH) do { \
 	(TEX) = createMetalFloatTextureEmpty(metalTextureSpec((WIDTH), (HEIGHT), (DEPTH), true)); \
@@ -1525,7 +1539,7 @@ class ProjectorClass {
 			if (status == NVRTC_SUCCESS)
 				memAlloc.auxMod = true;
 #elif defined(METAL)
-			if (MethodList.CPType) {
+			if (MethodList.CPType || inputScalars.projector_type == 6) {
 				status = buildProgram(inputScalars.verbose, contentAux, programAux, optionsAux);
 				if (status != SUCCESS_VALUE)
 					return status;
@@ -1999,14 +2013,12 @@ class ProjectorClass {
 			else
 				CREATE_KERNEL(kernelSensList, programSens, "projectorType123", "Failed to create sensitivity image kernels\n");
 		}
-#if !defined(METAL)
 		if (inputScalars.projector_type == 6) {
 			CREATE_KERNEL(kernelRotate, programAux, "rotate", "Failed to create bilinear rotation kernel\n");
 			if (DEBUG || inputScalars.verbose >= 3) {
 				mexPrint("Bilinear rotation kernel successfully created\n");
 			}
 		}
-#endif // END non-Metal auxiliary kernel creation
 		return status;
 	}
 public:
@@ -6597,10 +6609,9 @@ public:
 		return 0;
 	}
 
-#if !defined(METAL)
 #if defined(CUDA) || defined(HIP)
 	inline int rotateCustom(const scalarStruct & inputScalars, float cosa, float sina, const int ii = 0) {
-#elif defined(OPENCL)
+#elif defined(OPENCL) || defined(METAL)
 	inline int rotateCustom(const scalarStruct & inputScalars, const float cosa, const float sina, const int ii = 0) {
 #endif // END CUDA
 		if (inputScalars.verbose >= 3)
@@ -6608,9 +6619,26 @@ public:
 		Status status = SUCCESS_VALUE;
 #if defined(CUDA) || defined(HIP)
 		std::vector<void*> kArgs;
-#elif defined(OPENCL)
+#elif defined(OPENCL) || defined(METAL)
 		UINT32_t kernelIndRot = 0U;
 #endif // END CUDA
+#if defined(METAL)
+		if (!queueBP || !kernelRotate) {
+			mexPrint("Unable to create Metal bilinear rotation encoder");
+			return -1;
+		}
+		NS::SharedPtr<MTL::CommandBuffer> commandBuffer = NS::RetainPtr(queueBP->commandBuffer());
+		if (!commandBuffer) {
+			mexPrint("Unable to create Metal bilinear rotation encoder");
+			return -1;
+		}
+		NS::SharedPtr<MTL::ComputeCommandEncoder> encoder = NS::RetainPtr(commandBuffer->computeCommandEncoder());
+		if (!encoder) {
+			mexPrint("Unable to create Metal bilinear rotation encoder");
+			return -1;
+		}
+		encoder->setComputePipelineState(kernelRotate.get());
+#endif
 		SET_LAUNCH_RANGE3(global,
 			inputScalars.Nx[ii] + erotusPrior[0],
 			inputScalars.Ny[ii] + erotusPrior[1],
@@ -6633,11 +6661,18 @@ public:
 		else {
 			KARG(kArgs, kernelRotate, kernelIndRot, d_im);
 		}
+#if defined(METAL)
+		kParams.N_rotate = { static_cast<int>(VEC_X(d_N[ii])), static_cast<int>(VEC_Y(d_N[ii])), static_cast<int>(VEC_Z(d_N[ii])) };
+		kParams.cosa_rotate = cosa;
+		kParams.sina_rotate = sina;
+		KARG(kArgs, kernelRotate, kernelIndRot, kParams);
+#else
 		KARG(kArgs, kernelRotate, kernelIndRot, VEC_X(d_N[ii]));
 		KARG(kArgs, kernelRotate, kernelIndRot, VEC_Y(d_N[ii]));
 		KARG(kArgs, kernelRotate, kernelIndRot, VEC_Z(d_N[ii]));
 		KARG(kArgs, kernelRotate, kernelIndRot, cosa);
 		KARG(kArgs, kernelRotate, kernelIndRot, sina);
+#endif
 		// Compute the kernel
 #if defined(CUDA) || defined(HIP)
 		status = cuLaunchKernel(kernelRotate, global[0], global[1], global[2], localPrior[0], localPrior[1], localPrior[2], 0, CLCommandQueue[0], kArgs.data(), NULL);
@@ -6653,6 +6688,23 @@ public:
 				getErrorString(status);
 			}
 		}
+#elif defined(METAL)
+		{
+			const MTL::Size threadsPerThreadgroup = MTL::Size::Make(localPrior[0], localPrior[1], localPrior[2]);
+			const MTL::Size threadgroupsPerGrid = MTL::Size::Make(
+				global[0] / localPrior[0], global[1] / localPrior[1], global[2] / localPrior[2]);
+			encoder->dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup);
+			encoder->endEncoding();
+			commandBuffer->commit();
+			commandBuffer->waitUntilCompleted();
+			if (commandBuffer->status() == MTL::CommandBufferStatusError) {
+				NS::Error* error = commandBuffer->error();
+				const char* message = error && error->localizedDescription()
+					? error->localizedDescription()->utf8String() : "unknown Metal error";
+				mexPrintBase("Metal bilinear rotation failed: %s\n", message);
+				return -1;
+			}
+		}
 #elif defined(OPENCL)
 		status = (CLCommandQueue[0]).enqueueNDRangeKernel(kernelRotate, cl::NullRange, globalPrior, localPrior);
 		OCL_CHECK(status, "Failed to launch the bilinear image rotation kernel\n", -1);
@@ -6662,10 +6714,9 @@ public:
 			mexPrint(BACKEND_STR " bilinear image rotation computed");
 		return 0;
 		}
-#endif // END non-Metal auxiliary kernels
-#if defined(CUDA) || defined(HIP)
-	inline int transferTex(const scalarStruct & inputScalars, CUdeviceptr * input, const bool RDP = false, const uint32_t Nz = 1) {
 
+#if defined(CUDA) || defined(HIP) || defined(METAL)
+	inline int transferTex(const scalarStruct& inputScalars, AFDeviceBuffer input, const bool RDP = false, const uint32_t Nz = 1) {
 		Status status = SUCCESS_VALUE;
 		if (RDP)
 			CREATE_FLOAT_TEXTURE3D_FROM_DEVICE(d_RDPrefI, imArray, input, inputScalars.Nx[0], inputScalars.Ny[0], Nz,
@@ -6673,12 +6724,11 @@ public:
 		else
 			CREATE_FLOAT_TEXTURE3D_FROM_DEVICE(d_inputI, imArray, input, inputScalars.Nx[0], inputScalars.Ny[0], Nz,
 				BACKEND_TEXTURE_POINT, BACKEND_TEXTURE_DEFAULT_FLAGS);
-		CUDA_CHECK(status, "Image copy failed\n", -1);
+		CHECK(status, "Image copy failed\n", -1);
 		FINISH_QUEUE(status, "Synchronization failed\n", -1);
 		if (DEBUG)
 			mexPrint("Synchronization completed\n");
 		return 0;
 	}
-
-#endif // END CUDA
+#endif // END CUDA/METAL
 	};

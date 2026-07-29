@@ -88,6 +88,10 @@ struct ScalarKernelParams { // Kernel scalar values that do not change with time
     float theta_PDHG;
     float tau_PDHG;
     CL_UINT8 enforcePositivity_PDHG;
+    // Below parameters are used in the rotation kernel
+    CL_INT3 N_rotate;
+    float cosa_rotate;
+    float sina_rotate;
 };
 
 #undef CL_FLOAT2

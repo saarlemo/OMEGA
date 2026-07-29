@@ -2083,10 +2083,26 @@ void PDHGUpdate(
 #ifdef ROTATE
 #if defined(USEIMAGES) && defined(OPENCL)
 CONSTANT sampler_t samplerRotate = CLK_NORMALIZED_COORDS_FALSE | CLK_FILTER_LINEAR | CLK_ADDRESS_CLAMP_TO_EDGE;
+#elif defined(USEIMAGES) && defined(METAL)
+constexpr metal::sampler samplerRotate(metal::coord::pixel, metal::filter::linear, metal::address::clamp_to_edge);
 #endif
-// Initial version from: https://stackoverflow.com/questions/9833316/cuda-image-rotation/10008412#10008412
-KERNEL void rotate(CLGLOBAL float* CLRESTRICT rotim, IMTYPE im, const int Nx, const int Ny, const int Nz, const float cosa, const float sina) {
+KERNEL void rotate(
+	CLGLOBAL float* CLRESTRICT rotim BUF0,
+	IMTYPE im TEX1,
+#ifdef METAL
+	SCALAR_PARAMS(scalarParams) BUF2,
+	uint3 metalGlobalId [[thread_position_in_grid]]
+#else
+	const int Nx, const int Ny, const int Nz, const float cosa, const float sina
+#endif
+) {
+	// Initial version from: https://stackoverflow.com/questions/9833316/cuda-image-rotation/10008412#10008412
+#ifdef METAL
+	UNPACK_SCALAR_PARAMS_ROTATE(scalarParams)
+	LTYPE3 xyz = MINT3(metalGlobalId.x, metalGlobalId.y, metalGlobalId.z);
+#else
 	LTYPE3 xyz = MINT3(GID0, GID1, GID2);
+#endif
 	if (xyz.x >= Nx || xyz.y >= Ny || xyz.z >= Nz)
 		return;
 	const LTYPE n = (xyz.x) + (xyz.y) * (Nx) + (xyz.z) * (Nx * Ny);
@@ -2104,6 +2120,8 @@ KERNEL void rotate(CLGLOBAL float* CLRESTRICT rotim, IMTYPE im, const int Nx, co
         val = tex3D<float>(im, src_x + FLOAT_HALF, src_y + FLOAT_HALF, CFLOAT(xyz.z) + FLOAT_HALF);
 #elif defined(OPENCL)
         val = read_imagef(im, samplerRotate, (float4)(src_x + FLOAT_HALF, src_y + FLOAT_HALF, CFLOAT(xyz.z) + FLOAT_HALF, FLOAT_ZERO)).w;
+#elif defined(METAL)
+		val = im.sample(samplerRotate, float3(src_x + FLOAT_HALF, src_y + FLOAT_HALF, CFLOAT(xyz.z) + FLOAT_HALF)).r;
 #endif
 #else
         // BILINEAR INTERPOLATION
@@ -2115,10 +2133,10 @@ KERNEL void rotate(CLGLOBAL float* CLRESTRICT rotim, IMTYPE im, const int Nx, co
         const float sx = (src_x - src_x0);
         const float sy = (src_y - src_y0);
 
-        const int idx_src00 = min(max(0, src_x0 + src_y0 * Nx), (Nx * Ny) - 1);
-        const int idx_src10 = min(max(0, src_x1 + src_y0 * Nx), (Nx * Ny) - 1);
-        const int idx_src01 = min(max(0, src_x0 + src_y1 * Nx), (Nx * Ny) - 1);
-        const int idx_src11 = min(max(0, src_x1 + src_y1 * Nx), (Nx * Ny) - 1);
+        const int idx_src00 = MIN(MAX(0, src_x0 + src_y0 * Nx), (Nx * Ny) - 1);
+        const int idx_src10 = MIN(MAX(0, src_x1 + src_y0 * Nx), (Nx * Ny) - 1);
+        const int idx_src01 = MIN(MAX(0, src_x0 + src_y1 * Nx), (Nx * Ny) - 1);
+        const int idx_src11 = MIN(MAX(0, src_x1 + src_y1 * Nx), (Nx * Ny) - 1);
 
         val  = (FLOAT_ONE - sx) * (FLOAT_ONE - sy) * im[idx_src00 + xyz.z * Nx * Ny];
         val += (       sx) * (FLOAT_ONE - sy) * im[idx_src10 + xyz.z * Nx * Ny];

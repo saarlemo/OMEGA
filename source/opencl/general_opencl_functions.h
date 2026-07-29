@@ -184,6 +184,14 @@
     const float tau = scalarParams.tau_PDHG; \
     const uchar enforcePositivity = scalarParams.enforcePositivity_PDHG;
 
+#define UNPACK_SCALAR_PARAMS_ROTATE(scalarParams) \
+    const int3 N_rotate = scalarParams.N_rotate; \
+    const int Nx = N_rotate.x; \
+    const int Ny = N_rotate.y; \
+    const int Nz = N_rotate.z; \
+    const float cosa = scalarParams.cosa_rotate; \
+    const float sina = scalarParams.sina_rotate;
+
 
 #ifdef METAL
 

@@ -977,7 +977,6 @@ inline int proxTGVDivAF(const std::vector<af::array>&, std::vector<af::array>&, 
 	const float, const float, ProjectorClass&) { return -1; }
 inline int elementWiseAF(const af::array&, af::array&, const bool, ProjectorClass&, const bool = false) { return -1; }
 inline int poissonUpdateAF(af::array&, const af::array&, const scalarStruct&, const float, const float, const float, ProjectorClass&, const int = 0) { return -1; }
-inline int rotateCustomAF(af::array&, const af::array&, const scalarStruct&, ProjectorClass&, const float, const int = 0) { return -1; }
 #else
 
 // Computes custom median root prior, OpenCL, CUDA or CPU
@@ -1664,12 +1663,12 @@ inline int PDHGUpdateAF(af::array& im, const af::array& rhs, const scalarStruct&
 }
 #endif
 
-#if !defined(METAL) && !defined(CPU)
+#if !defined(CPU)
 inline int rotateCustomAF(af::array& imrot, const af::array& im, const scalarStruct& inputScalars, ProjectorClass& proj, const float angle, const int ii = 0) {
 	int status = 0;
 	if (!inputScalars.useBuffers) {
-#if defined(CUDA)
-		CUdeviceptr* input = transferAF(im);
+#if defined(CUDA) || defined(HIP) || defined(METAL)
+		AFDeviceBuffer input = transferAF(im);
 		status = proj.transferTex(inputScalars, input, false, inputScalars.Nz[0]);
 #elif defined(OPENCL)
         status = proj.CLCommandQueue[0].enqueueCopyBufferToImage(cl::Buffer(*im.device<cl_mem>(), true), proj.d_inputI, 0, proj.origin, proj.region);
@@ -1686,7 +1685,11 @@ inline int rotateCustomAF(af::array& imrot, const af::array& im, const scalarStr
 	proj.d_rhs = transferAF(imrot);
 	const float cosa = std::cos(-angle);
 	const float sina = std::sin(-angle);
-	status = proj.rotateCustom(inputScalars, cosa, sina);
+	status = proj.rotateCustom(inputScalars, cosa, sina, ii);
+#ifdef METAL
+	if (status == 0)
+		transferMetalToAF(proj.d_rhs, imrot);
+#endif
 	imrot.unlock();
 	im.unlock();
 	if (status != 0) {
@@ -1826,7 +1829,7 @@ inline void forwardProjectionType6(af::array& fProj, const Weighting& w_vec, AF_
 		mexPrint("Starting SPECT forward projection");
 	int64_t u1 = uu;
 	const af::array apuArr = af::moddims(vec.im_os[timestep][ii], inputScalars.Nx[ii], inputScalars.Ny[ii], inputScalars.Nz[ii]);
-
+    
 	for (int kk = 0; kk < length; kk++) {
 		af::array kuvaRot;
         
