@@ -441,8 +441,8 @@ inline void form_data_variables(Weighting& w_vec, const mxArray* options, scalar
 		}
 	}
 	// General variables for neighborhood-based methods
-	if ((MethodList.L || MethodList.FMH || MethodList.WeightedMean || MethodList.Quad || MethodList.Huber || MethodList.MRP || MethodList.NLM || MethodList.ProxNLM || MethodList.hyperbolic || MethodList.RDP) 
-		&& MethodList.MAP) {
+	if ((MethodList.L || MethodList.FMH || MethodList.WeightedMean || MethodList.Quad || MethodList.Huber || MethodList.MRP || MethodList.NLM || MethodList.ProxNLM || MethodList.hyperbolic || MethodList.RDP
+		|| MethodList.GGMRF) && MethodList.MAP) {
 		// Neighborhood size
 		w_vec.Ndx = getScalarUInt32(getField(options, 0, "Ndx"), -24);
 		w_vec.Ndy = getScalarUInt32(getField(options, 0, "Ndy"), -25);

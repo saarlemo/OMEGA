@@ -969,7 +969,7 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
 				w_vec.RDPref[timestep] += af::sqrt(vec.rhs_os[timestep][0] + inputScalars.epps);
 				af::eval(w_vec.RDPref[timestep]);
 			}
-            proj.memSize += (sizeof(float) * inputScalars.im_dim[ii]);
+            proj.memSize += (sizeof(float) * inputScalars.im_dim[0]);
 			if (DEBUG) {
 				mexPrintBase("w_vec.RDPref[timestep] = %f\n", af::sum<float>(w_vec.RDPref[timestep]));
 				mexEval();
@@ -1411,7 +1411,7 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
                             vec.im_os[tt][0] = af::constant(1e-4f, inputScalars.lDimStruct.imDimPr[ii]);
                         }
                         else
-                            if (ii > 0 && (MethodList.NLM || MethodList.RDP || MethodList.hyperbolic || MethodList.GGMRF || MethodList.TV)) {
+                            if (ii > 0 && inputScalars.lDimStruct.startPr[ii] > 0 && (MethodList.NLM || MethodList.RDP || MethodList.hyperbolic || MethodList.GGMRF || MethodList.TV)) {
                                 vec.im_os[tt][0] = af::join(0, af::array(inputScalars.lDimStruct.startPr[ii], &apuPr[inputScalars.lDimStruct.imDim[ii - 1] - inputScalars.lDimStruct.startPr[ii]], afHost), 
                                     af::array(inputScalars.lDimStruct.imDim[ii] + inputScalars.lDimStruct.endPr[ii], &apuF[inputScalars.lDimStruct.cumDim[ii]], afHost));
                             }

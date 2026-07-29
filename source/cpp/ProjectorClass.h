@@ -5578,6 +5578,10 @@ public:
 		if (DEBUG || inputScalars.verbose >= 3) {
 			INIT_TIMER(tStart, tEnd);
 		}
+#if defined(OPENCL)
+		if (inputScalars.largeDim)
+			SET_RANGE_Z(globalPrior, inputScalars.Nz[0]);
+#endif // END CUDA
 		uint32_t Nz, NzOrig;
 		UINT2_t nOffset;
 		if (inputScalars.largeDim)
@@ -5599,8 +5603,6 @@ public:
 		std::vector<void*> kArgs;
 #elif defined(OPENCL)
 		UINT32_t kernelIndGGMRF = 0U;
-		if (inputScalars.largeDim)
-			SET_RANGE_Z(globalPrior, inputScalars.Nz[0]);
 #endif // END CUDA
 		if (DEBUG) {
 			mexPrintBase("p = %f\n", p);
