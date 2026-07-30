@@ -175,7 +175,12 @@ void projectorType4Forward(
 	const uint d_Nx, const uint d_Ny, const uint d_Nz, const float bx, const float by, const float bz, 
     const float d_bmaxx, const float d_bmaxy, const float d_bmaxz, const float d_scalex, const float d_scaley, const float d_scalez,
 #else
-	const uint3 d_N, const float3 b, const float3 bmax, const float3 d_scale, 
+	const uint3 d_N, const float3 b, const float3 bmax, const float3 d_scale,
+#endif
+#ifdef LARGEDIM
+	// Axial extent of the FULL volume, i.e. of every subvolume combined
+	// b/bmax above cover the current subvolume only
+	const float bzGlobalMin, const float bzGlobalMax,
 #endif
 #ifdef FP
     IMAGE3D d_OSEM, CLGLOBAL float* CLRESTRICT d_output,
@@ -408,6 +413,17 @@ void projectorType4Forward(
 
     const float tStart = FMAX(FMAX(tMin.x, tMin.y), tMin.z);
     const float tEnd = FMIN(FMIN(tMax.x, tMax.y), tMax.z);
+#ifdef LARGEDIM
+	// Originally, the interpolation always began at the edge of the current subvolume which was also
+	// the ending point of the previous subvolume which lead to uneven and duplicate sampling
+	// These values compute the global values to correctly "move" the sampling point to the location
+	// it is supposed to be after the previous volume
+	const float tBackZG = (bzGlobalMin - s.z) / v.z;
+	const float tFrontZG = (bzGlobalMax - s.z) / v.z;
+	const float tStartG = FMAX(FMAX(tMin.x, tMin.y), FMIN(tFrontZG, tBackZG));
+#else
+	const float tStartG = tStart;
+#endif
 #ifdef TOF //////////////// TOF ////////////////
     float TOFSum = FLOAT_ZERO;
 #endif //////////////// END TOF ////////////////
@@ -445,23 +461,33 @@ void projectorType4Forward(
     float sInd;
     float vDim;
     if (crx >= cry && crx >= crz) {
-        sInd = (s.x + v.x * tStart - b.x) * d_scale.x * CFLOAT(d_N.x) - FLOAT_HALF;
+        sInd = (s.x + v.x * tStartG - b.x) * d_scale.x * CFLOAT(d_N.x) - FLOAT_HALF;
         vDim = v.x;
     }
     else if (cry >= crz) {
-        sInd = (s.y + v.y * tStart - b.y) * d_scale.y * CFLOAT(d_N.y) - FLOAT_HALF;
+        sInd = (s.y + v.y * tStartG - b.y) * d_scale.y * CFLOAT(d_N.y) - FLOAT_HALF;
         vDim = v.y;
     }
     else {
-        sInd = (s.z + v.z * tStart - b.z) * d_scale.z * CFLOAT(d_N.z) - FLOAT_HALF;
+#ifdef LARGEDIM
+        sInd = (s.z + v.z * tStartG - bzGlobalMin) * d_scale.z * CFLOAT(d_N.z) - FLOAT_HALF;
+#else
+        sInd = (s.z + v.z * tStartG - b.z) * d_scale.z * CFLOAT(d_N.z) - FLOAT_HALF;
+#endif
         vDim = v.z;
     }
     // Determine the first t value, depending on whether the ray is descending or ascending
     float t0;
     if (vDim > FLOAT_ZERO)
-        t0 = tStart + (FLOOR(sInd) - sInd) * tStep;
+        t0 = tStartG + (FLOOR(sInd) - sInd) * tStep;
     else
-        t0 = tStart + (sInd - FLOOR(sInd)) * tStep;
+        t0 = tStartG + (sInd - FLOOR(sInd)) * tStep;
+#ifdef LARGEDIM
+	// The above now computes the global entry point
+	// Here we move the starting point to the correct location if necessary
+	if (tStart > tStartG)
+		t0 += FLOOR((tStart - t0) / tStep + FLOAT_ONE) * tStep;
+#endif
     // Number of steps and the physical length of one step (the interpolation weight)
     uint nSteps = 0U;
     if (t0 <= tEnd)
@@ -478,7 +504,12 @@ void projectorType4Forward(
     const float tStep = DIVIDE(dL, L);
     // The interpolation weight is the fixed input dL
     const float stepLen = dL;
-    float t0 = tStart;
+	// Same as above
+    float t0 = tStartG;
+#ifdef LARGEDIM
+	if (tStart > tStartG)
+		t0 += FLOOR((tStart - t0) / tStep + FLOAT_ONE) * tStep;
+#endif
 	// Compute the total number of steps
     uint nSteps = 0;
     if (t0 <= tEnd)
@@ -516,7 +547,11 @@ void projectorType4Forward(
     LL = CFLOAT(nSteps) * stepLen;
 #endif
 #ifndef JOSEPH
-    t0 = tStart + tStep / 10.f;
+    t0 = tStartG + tStep / 10.f;
+#ifdef LARGEDIM
+	if (tStart > tStartG)
+		t0 += FLOOR((tStart - t0) / tStep + FLOAT_ONE) * tStep;
+#endif
     nSteps = 0;
     if (t0 <= tEnd)
         nSteps = CUINT((tEnd - t0) / tStep) + 1u;

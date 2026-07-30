@@ -878,6 +878,9 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
     inputScalars.adaptiveType = options.PDAdaptiveType;
     inputScalars.storeFP = options.storeFP;
     inputScalars.useTotLength = options.useTotLength;
+    // largeDim isn't particularly recommended for PET, but this makes sure that the ray is correctly normalized
+    if (inputScalars.largeDim)
+        inputScalars.useTotLength = true;
     if (inputScalars.CT) {
         inputScalars.nColsD = options.nColsD;
         inputScalars.nRowsD = options.nRowsD;

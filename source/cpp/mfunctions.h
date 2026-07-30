@@ -156,6 +156,9 @@ inline void loadInput(scalarStruct& inputScalars, const mxArray* options, const 
 	inputScalars.adaptiveType = getScalarUInt32(options, 0, "PDAdaptiveType");
 	inputScalars.storeFP = getScalarBool(options, 0, "storeFP");
 	inputScalars.useTotLength = getScalarBool(options, 0, "useTotLength");
+    // largeDim isn't particularly recommended for PET, but this makes sure that the ray is correctly normalized
+	if (inputScalars.largeDim)
+		inputScalars.useTotLength = true;
 	// Optional user-defined local/work-group (block) size (int32 vector of up to 3 elements). Any value
 	// left negative (or the field omitted) falls back to the built-in defaults in addProjector.
 	if (mxGetFieldNumber(options, "local_size") >= 0) {

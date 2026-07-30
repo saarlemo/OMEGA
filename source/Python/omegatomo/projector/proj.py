@@ -1237,10 +1237,19 @@ class projectorClass:
         if self.largeDim:
             if not self.PDHG and not self.FDK and not self.PKMA and not self.PDDY and not self.PDHGL1 and not self.PDHGKL:
                 raise ValueError('Large dimension support is only available for PDHG, PKMA, and FDK!')
-            if self.MRP or self.quad or self.Huber or self.weighted_mean or self.FMH or self.ProxTV or self.TGV or self.L or self.AD:
+            if self.MRP or self.quad or self.Huber or self.weighted_mean or self.FMH or self.ProxTV or self.TGV or self.L or self.AD or self.APLS:
                 raise ValueError('Large dimension support is only available for non-local methods, RDP, GGMRF, hyperbolic prior and TV!')
             if self.projector_type in [45, 15, 5, 54, 51, 2, 3]:
                 raise ValueError('Large dimension support is only for projector types 4 and 14!')
+            # Anatomical weighting is not supported by largeDim
+            if self.RDP and self.RDP_use_anatomical:
+                raise ValueError('Anatomical weighting for RDP (RDP_use_anatomical) is not supported with largeDim!')
+            if self.TV and self.TV_use_anatomical:
+                raise ValueError('Anatomical weighting for TV (TV_use_anatomical) is not supported with largeDim!')
+            if self.NLM and self.NLM_use_anatomical:
+                raise ValueError('Anatomical weighting for NLM (NLM_use_anatomical) is not supported with largeDims!')
+            if self.maskBP.ndim == 3 and self.maskBP.shape[2] > 1:
+                raise ValueError('A 3D backprojection/prior mask is not supported with largeDim! Use a 2D (transaxial) mask instead.')
         if self.useCUDA and self.useCPU:
             raise ValueError('Both CUDA and CPU selected! Select only one!')
         

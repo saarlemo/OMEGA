@@ -1038,6 +1038,9 @@ class ProjectorClass {
 		}
 		if (inputScalars.useTotLength)// && !inputScalars.SPECT)
 			ADD_OPT(options, "-DTOTLENGTH");
+		// For largeDim, projector type 4 needs the entire volume sizes/locations to correctly interpolate the ray
+		if (inputScalars.largeDim)
+			ADD_OPT(options, "-DLARGEDIM");
 		if (inputScalars.CT && MethodList.FDK && inputScalars.useFDKWeights)
 			ADD_OPT(options, "-DFDK");
 		if (inputScalars.offset)
@@ -2105,6 +2108,8 @@ public:
 	std::chrono::steady_clock::time_point tEndLocal, tEndGlobal, tEndAll;
 	// Distance from the origin to the corner of the image, voxel size and distance from the origin to the opposite corner of the image
 	std::vector<FLOAT3_t> b, d, bmax;
+	// Axial extent of the full volume with largeDim, where b/bmax above only cover the current subvolume
+	float bzGlobalFP[2] = { 0.f, 0.f }, bzGlobalBP[2] = { 0.f, 0.f };
 	std::vector<INT3_t> d_N;
 	UCHAR_t no_norm = 0;
 	size_t memSize = 0ULL;
@@ -3944,6 +3949,14 @@ public:
 			else {
 				KARG_SCALAR(kTemp, kernelFP, kernelIndFPSubIter, bmax[ii]);
 				KARG_SCALAR(kTemp, kernelFP, kernelIndFPSubIter, inputScalars.d_Scale4[ii]);
+				if (inputScalars.largeDim) {
+					// Only volume 0 is divided into subvolumes
+					// for the multi-resolution volumes b/bmax already span the whole volume
+					bzGlobalFP[0] = (ii == 0) ? inputScalars.lDimStruct.bz[0] : VEC_Z(b[ii]);
+					bzGlobalFP[1] = (ii == 0) ? inputScalars.lDimStruct.bmaxZ[inputScalars.subsets - 1] : VEC_Z(bmax[ii]);
+					KARG_SCALAR(kTemp, kernelFP, kernelIndFPSubIter, bzGlobalFP[0]);
+					KARG_SCALAR(kTemp, kernelFP, kernelIndFPSubIter, bzGlobalFP[1]);
+				}
 			}
 		}
 		if (inputScalars.FPType == 4) {
@@ -4907,6 +4920,13 @@ public:
 				KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, b[ii]);
 				KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, bmax[ii]);
 				KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, inputScalars.d_Scale4[ii]);
+				if (inputScalars.largeDim) {
+					// Non-CT BP 4 needs the same volume information as FP
+					bzGlobalBP[0] = (ii == 0) ? inputScalars.lDimStruct.bz[0] : VEC_Z(b[ii]);
+					bzGlobalBP[1] = (ii == 0) ? inputScalars.lDimStruct.bmaxZ[inputScalars.subsets - 1] : VEC_Z(bmax[ii]);
+					KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, bzGlobalBP[0]);
+					KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, bzGlobalBP[1]);
+				}
 				KARG_METAL_SLOT(kernelIndBPSubIter, 1);
 				KARG(kTemp, kernelBP, kernelIndBPSubIter, d_output);
 				KARG(kTemp, kernelBP, kernelIndBPSubIter, vec_opencl.d_rhs_os[uu]);
@@ -5441,6 +5461,11 @@ public:
 		if (DEBUG || inputScalars.verbose >= 3) {
 			INIT_TIMER(tStart, tEnd);
 		}
+#if defined(OPENCL)
+		UINT32_t kernelIndRDP = 0U;
+		if (inputScalars.largeDim)
+			SET_RANGE_Z(globalPrior, inputScalars.Nz[0]);
+#endif // END CUDA
 		uint32_t Nz, NzOrig;
 		UINT2_t nOffset;
 		if (inputScalars.largeDim)
@@ -5458,11 +5483,6 @@ public:
 			nOffset = { (Nz - NzOrig) / 2, (Nz + NzOrig) / 2 };
 		else if (inputScalars.largeDim)
 			nOffset = { Nz - NzOrig, Nz };
-#if defined(OPENCL)
-		UINT32_t kernelIndRDP = 0U;
-		if (inputScalars.largeDim)
-			SET_RANGE_Z(globalPrior, inputScalars.Nz[0]);
-#endif // END CUDA
 		//FINISH_QUEUE(status, "Queue finish failed before RDP kernel\n", -1);
 		if (DEBUG) {
 			mexPrintBase("inputScalars.epps = %.9f\n", inputScalars.epps);
