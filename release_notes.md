@@ -113,6 +113,22 @@
 
 - Multi-ray TOF should now work, though in general it's not recommended
 
+- TGV works when using masks and not using images i.e. useImages = false
+
+- OpenCL CPUs now default to useImages = false
+
+- Implementation 2 with CPU no longer gives errors in MATLAB with projector type 11
+
+- Any algorithm that didn't use sensitivity image now works when useImages = false
+
+- Fixed forward projection masks when useImages = false
+
+- Fixed MRP (implementation 2 CPU)
+
+- PET attenuation now works when useImages = false
+
+- PSF padding now uses af::pad and requires AF 3.8 or newer, so OMEGA now requires AF 3.8 minimum
+
 ## OMEGA v2.2.0
 
 ### New features
