@@ -173,6 +173,10 @@ inline void loadInput(scalarStruct& inputScalars, const mxArray* options, const 
 	// Optional: compute the spatial prior only every regEveryIter-th (sub)iteration (1 = every time).
 	if (mxGetFieldNumber(options, "regEveryIter") >= 0)
 		inputScalars.regEveryIter = getScalarInt32(options, 0, "regEveryIter");
+	// Optimize PDHG/PKMA/MBSREM/BSREM in specific cases
+	// Only specific configurations are supported, see checkFastPDHG in functions.hpp
+	if (mxGetFieldNumber(options, "fastPDHG") >= 0)
+		inputScalars.fastPDHG = getScalarBool(options, 0, "fastPDHG");
 	const uint32_t* devPointer = getUint32s(options, "use_device");
 	size_t devLength = mxGetNumberOfElements(mxGetField(options, 0, "use_device"));
 	inputScalars.usedDevices = std::vector<uint32_t>(devPointer, devPointer + devLength);

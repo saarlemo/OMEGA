@@ -236,23 +236,23 @@ using TimerPoint = std::chrono::steady_clock::time_point;
 #if defined(CUDA) || defined(HIP)
 #define RESIZE_TEXTURE_VECTOR(TEXTURES, ARRAYS, SIZE) do { (TEXTURES).resize(SIZE); (ARRAYS).resize(SIZE); } while(0)
 #define RESIZE_TEXTURE_ARRAY(ARRAYS, SIZE) do { (ARRAYS).resize(SIZE); } while(0)
-#define CREATE_FLOAT_TEXTURE3D_FROM_HOST(TEX, ARRAY, SRC, HEIGHT, WIDTH, DEPTH, FILTER, FLAGS) do { \
-	const auto textureSpec = cudaFloatTextureSpec((HEIGHT), (WIDTH), (DEPTH), (FILTER), (FLAGS)); \
+#define CREATE_FLOAT_TEXTURE3D_FROM_HOST(TEX, ARRAY, SRC, X_DIM, Y_DIM, DEPTH, FILTER, FLAGS) do { \
+	const auto textureSpec = cudaFloatTextureSpec((Y_DIM), (X_DIM), (DEPTH), (FILTER), (FLAGS)); \
 	status = createCudaTexture3DFromHost((TEX), (ARRAY), (SRC), textureSpec); \
 } while(0)
-#define CREATE_FLOAT_TEXTURE3D_FROM_DEVICE(TEX, ARRAY, SRC, HEIGHT, WIDTH, DEPTH, FILTER, FLAGS) do { \
-	const auto textureSpec = cudaFloatTextureSpec((HEIGHT), (WIDTH), (DEPTH), (FILTER), (FLAGS)); \
+#define CREATE_FLOAT_TEXTURE3D_FROM_DEVICE(TEX, ARRAY, SRC, X_DIM, Y_DIM, DEPTH, FILTER, FLAGS) do { \
+	const auto textureSpec = cudaFloatTextureSpec((Y_DIM), (X_DIM), (DEPTH), (FILTER), (FLAGS)); \
 	status = createCudaTexture3DFromDevice((TEX), (ARRAY), reinterpret_cast<CUdeviceptr>(SRC), textureSpec); \
 } while(0)
 #define CREATE_FLOAT_TEXTURE3D_EMPTY(TEX, ARRAY, WIDTH, HEIGHT, DEPTH) do { \
 	status = SUCCESS_VALUE; \
 } while(0)
-#define CREATE_MASK_TEXTURE2D_FROM_HOST(TEX, ARRAY, SRC, HEIGHT, WIDTH, FLAGS) do { \
-	const auto textureSpec = cudaMaskTextureSpec((HEIGHT), (WIDTH), 1, (FLAGS)); \
+#define CREATE_MASK_TEXTURE2D_FROM_HOST(TEX, ARRAY, SRC, X_DIM, Y_DIM, FLAGS) do { \
+	const auto textureSpec = cudaMaskTextureSpec((Y_DIM), (X_DIM), 1, (FLAGS)); \
 	status = createCudaTexture2DFromHost((TEX), (ARRAY), (SRC), textureSpec); \
 } while(0)
-#define CREATE_MASK_TEXTURE3D_FROM_HOST(TEX, TEX3D, ARRAY, SRC, HEIGHT, WIDTH, VIEW_DEPTH, COPY_DEPTH, ARRAY_DEPTH, FLAGS) do { \
-	auto textureSpec = cudaMaskTextureSpec((HEIGHT), (WIDTH), (VIEW_DEPTH), (FLAGS)); \
+#define CREATE_MASK_TEXTURE3D_FROM_HOST(TEX, TEX3D, ARRAY, SRC, X_DIM, Y_DIM, VIEW_DEPTH, COPY_DEPTH, ARRAY_DEPTH, FLAGS) do { \
+	auto textureSpec = cudaMaskTextureSpec((Y_DIM), (X_DIM), (VIEW_DEPTH), (FLAGS)); \
 	textureSpec.copyDepth = (COPY_DEPTH); \
 	textureSpec.arrayDepth = (ARRAY_DEPTH); \
 	status = createCudaTexture3DFromHost((TEX), (ARRAY), (SRC), textureSpec); \
@@ -260,35 +260,35 @@ using TimerPoint = std::chrono::steady_clock::time_point;
 #elif defined(METAL)
 #define RESIZE_TEXTURE_VECTOR(TEXTURES, ARRAYS, SIZE) do { (TEXTURES).resize(SIZE); } while(0)
 #define RESIZE_TEXTURE_ARRAY(ARRAYS, SIZE) do { } while(0)
-#define CREATE_FLOAT_TEXTURE3D_FROM_HOST(TEX, ARRAY, SRC, HEIGHT, WIDTH, DEPTH, FILTER, FLAGS) do { \
-	(TEX) = createMetalFloatTextureFromHost((SRC), metalTextureSpec((HEIGHT), (WIDTH), (DEPTH), true)); \
+#define CREATE_FLOAT_TEXTURE3D_FROM_HOST(TEX, ARRAY, SRC, X_DIM, Y_DIM, DEPTH, FILTER, FLAGS) do { \
+	(TEX) = createMetalFloatTextureFromHost((SRC), metalTextureSpec((X_DIM), (Y_DIM), (DEPTH), true)); \
 	status = (TEX).get() ? SUCCESS_VALUE : -1; \
 } while(0)
-#define CREATE_FLOAT_TEXTURE3D_FROM_DEVICE(TEX, ARRAY, SRC, HEIGHT, WIDTH, DEPTH, FILTER, FLAGS) do { \
-	(TEX) = createMetalFloatTextureFromBuffer((SRC), metalTextureSpec((WIDTH), (HEIGHT), (DEPTH), true)); \
+#define CREATE_FLOAT_TEXTURE3D_FROM_DEVICE(TEX, ARRAY, SRC, X_DIM, Y_DIM, DEPTH, FILTER, FLAGS) do { \
+	(TEX) = createMetalFloatTextureFromBuffer((SRC), metalTextureSpec((X_DIM), (Y_DIM), (DEPTH), true)); \
 	status = (TEX).get() ? SUCCESS_VALUE : -1; \
 } while(0)
 #define CREATE_FLOAT_TEXTURE3D_EMPTY(TEX, ARRAY, WIDTH, HEIGHT, DEPTH) do { \
 	(TEX) = createMetalFloatTextureEmpty(metalTextureSpec((WIDTH), (HEIGHT), (DEPTH), true)); \
 	status = (TEX).get() ? SUCCESS_VALUE : -1; \
 } while(0)
-#define CREATE_MASK_TEXTURE2D_FROM_HOST(TEX, ARRAY, SRC, HEIGHT, WIDTH, FLAGS) do { \
-	(TEX) = createMetalMaskTextureFromHost((SRC), metalTextureSpec((HEIGHT), (WIDTH), 1, false)); \
+#define CREATE_MASK_TEXTURE2D_FROM_HOST(TEX, ARRAY, SRC, X_DIM, Y_DIM, FLAGS) do { \
+	(TEX) = createMetalMaskTextureFromHost((SRC), metalTextureSpec((X_DIM), (Y_DIM), 1, false)); \
 	status = (TEX).get() ? SUCCESS_VALUE : -1; \
 } while(0)
-#define CREATE_MASK_TEXTURE3D_FROM_HOST(TEX, TEX3D, ARRAY, SRC, HEIGHT, WIDTH, VIEW_DEPTH, COPY_DEPTH, ARRAY_DEPTH, FLAGS) do { \
-	(TEX) = createMetalMaskTextureFromHost((SRC), metalTextureSpec((HEIGHT), (WIDTH), (VIEW_DEPTH), true)); \
+#define CREATE_MASK_TEXTURE3D_FROM_HOST(TEX, TEX3D, ARRAY, SRC, X_DIM, Y_DIM, VIEW_DEPTH, COPY_DEPTH, ARRAY_DEPTH, FLAGS) do { \
+	(TEX) = createMetalMaskTextureFromHost((SRC), metalTextureSpec((X_DIM), (Y_DIM), (VIEW_DEPTH), true)); \
 	status = (TEX).get() ? SUCCESS_VALUE : -1; \
 } while(0)
 #elif defined(OPENCL)
 #define RESIZE_TEXTURE_VECTOR(TEXTURES, ARRAYS, SIZE) do { (TEXTURES).resize(SIZE); } while(0)
 #define RESIZE_TEXTURE_ARRAY(ARRAYS, SIZE) do { } while(0)
-#define CREATE_FLOAT_TEXTURE3D_FROM_HOST(TEX, ARRAY, SRC, HEIGHT, WIDTH, DEPTH, FILTER, FLAGS) do { \
-	(TEX) = TEX3D_t(CLContext, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, format, (HEIGHT), (WIDTH), (DEPTH), 0, 0, const_cast<void*>(static_cast<const void*>(SRC)), &status); \
+#define CREATE_FLOAT_TEXTURE3D_FROM_HOST(TEX, ARRAY, SRC, X_DIM, Y_DIM, DEPTH, FILTER, FLAGS) do { \
+	(TEX) = TEX3D_t(CLContext, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, format, (X_DIM), (Y_DIM), (DEPTH), 0, 0, const_cast<void*>(static_cast<const void*>(SRC)), &status); \
 } while(0)
-#define CREATE_FLOAT_TEXTURE3D_FROM_DEVICE(TEX, ARRAY, SRC, HEIGHT, WIDTH, DEPTH, FILTER, FLAGS) do { \
-	cl::detail::size_t_array textureRegion = { (WIDTH), (HEIGHT), (DEPTH) }; \
-	(TEX) = TEX3D_t(CLContext, CL_MEM_READ_ONLY, format, (WIDTH), (HEIGHT), (DEPTH), 0, 0, NULL, &status); \
+#define CREATE_FLOAT_TEXTURE3D_FROM_DEVICE(TEX, ARRAY, SRC, X_DIM, Y_DIM, DEPTH, FILTER, FLAGS) do { \
+	cl::detail::size_t_array textureRegion = { (X_DIM), (Y_DIM), (DEPTH) }; \
+	(TEX) = TEX3D_t(CLContext, CL_MEM_READ_ONLY, format, (X_DIM), (Y_DIM), (DEPTH), 0, 0, NULL, &status); \
 	OCL_CHECK(status, "Image creation failed\n", -1); \
 	status = CLCommandQueue[0].enqueueCopyBufferToImage((SRC), (TEX), 0, origin, textureRegion); \
 	OCL_CHECK(status, "Image copy failed\n", -1); \
@@ -297,11 +297,11 @@ using TimerPoint = std::chrono::steady_clock::time_point;
 #define CREATE_FLOAT_TEXTURE3D_EMPTY(TEX, ARRAY, WIDTH, HEIGHT, DEPTH) do { \
 	(TEX) = TEX3D_t(CLContext, CL_MEM_READ_ONLY, format, (WIDTH), (HEIGHT), (DEPTH), 0, 0, NULL, &status); \
 } while(0)
-#define CREATE_MASK_TEXTURE2D_FROM_HOST(TEX, ARRAY, SRC, HEIGHT, WIDTH, FLAGS) do { \
-	(TEX) = TEX2D_t(CLContext, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, formatMask, (HEIGHT), (WIDTH), 0, const_cast<void*>(static_cast<const void*>(SRC)), &status); \
+#define CREATE_MASK_TEXTURE2D_FROM_HOST(TEX, ARRAY, SRC, X_DIM, Y_DIM, FLAGS) do { \
+	(TEX) = TEX2D_t(CLContext, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, formatMask, (X_DIM), (Y_DIM), 0, const_cast<void*>(static_cast<const void*>(SRC)), &status); \
 } while(0)
-#define CREATE_MASK_TEXTURE3D_FROM_HOST(TEX, TEX3D, ARRAY, SRC, HEIGHT, WIDTH, VIEW_DEPTH, COPY_DEPTH, ARRAY_DEPTH, FLAGS) do { \
-	(TEX3D) = TEX3D_t(CLContext, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, formatMask, (HEIGHT), (WIDTH), (VIEW_DEPTH), 0, 0, const_cast<void*>(static_cast<const void*>(SRC)), &status); \
+#define CREATE_MASK_TEXTURE3D_FROM_HOST(TEX, TEX3D, ARRAY, SRC, X_DIM, Y_DIM, VIEW_DEPTH, COPY_DEPTH, ARRAY_DEPTH, FLAGS) do { \
+	(TEX3D) = TEX3D_t(CLContext, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, formatMask, (X_DIM), (Y_DIM), (VIEW_DEPTH), 0, 0, const_cast<void*>(static_cast<const void*>(SRC)), &status); \
 } while(0)
 #endif
 // Append one kernel argument VAR. CUDA pushes its address into the argument vector VEC; OpenCL
@@ -1202,6 +1202,12 @@ class ProjectorClass {
 				if (inputScalars.CT) {
 					ADD_OPT(os_options, "-DBP4");
 					ADD_OPT_INT(os_options, "-DNVOXELS", NVOXELS);
+#ifndef METAL
+					// fastPDHG build options
+					if (inputScalars.fastPDHG) {
+						addFastPDHGOptions(os_options, inputScalars, w_vec, MethodList, inputScalars.useHelical ? NVOXELSHELICAL : NVOXELS);
+					}
+#endif
 				}
 				else {
 					ADD_OPT(os_options, "-DPTYPE4");
@@ -1240,6 +1246,10 @@ class ProjectorClass {
 #if !defined(METAL)
 			if (inputScalars.BPType == 5 && inputScalars.CT && inputScalars.listmode == 0)
 				ADD_OPT(os_options, "-DGEOM5");
+			// Same as above, but for BPType 5
+			if (inputScalars.BPType == 5 && inputScalars.CT && inputScalars.fastPDHG) {
+				addFastPDHGOptions(os_options, inputScalars, w_vec, MethodList, inputScalars.pitch ? 1ULL : NVOXELS5);
+			}
 #endif
 			if (inputScalars.pitch) {
 				ADD_OPT_INT(os_options, "-DNVOXELS5", 1);
@@ -1388,7 +1398,7 @@ class ProjectorClass {
 				ADD_OPT(optionsAux, "-DMEDIAN");
 				ADD_OPT_INT(optionsAux, "-DSEARCH_WINDOW_X", w_vec.Ndx);
 				ADD_OPT_INT(optionsAux, "-DSEARCH_WINDOW_Y", w_vec.Ndy);
-				ADD_OPT_INT(optionsAux, "-DSEARCH_WINDOW_Z", w_vec.Ndz);
+				ADD_OPT_INT(optionsAux, "-DSEARCH_WINDOW_Z", inputScalars.Nz[0] == 1 ? 0U : w_vec.Ndz);
 			}
 			if (MethodList.NLM) {
 				ADD_OPT(optionsAux, "-DNLM_");
@@ -1426,12 +1436,14 @@ class ProjectorClass {
 			}
 			if (MethodList.GGMRF) {
 				ADD_OPT(optionsAux, "-DGGMRF");
+				ADD_OPT_INT(optionsAux, "-DSWPRIORTYPE", 1);
 				ADD_OPT_INT(optionsAux, "-DSWINDOWX", w_vec.Ndx);
 				ADD_OPT_INT(optionsAux, "-DSWINDOWY", w_vec.Ndy);
 				ADD_OPT_INT(optionsAux, "-DSWINDOWZ", w_vec.Ndz);
 			}
 			if (MethodList.hyperbolic) {
 				ADD_OPT(optionsAux, "-DHYPER");
+				ADD_OPT_INT(optionsAux, "-DSWPRIORTYPE", 2);
 				ADD_OPT_INT(optionsAux, "-DSWINDOWX", w_vec.Ndx);
 				ADD_OPT_INT(optionsAux, "-DSWINDOWY", w_vec.Ndy);
 				ADD_OPT_INT(optionsAux, "-DSWINDOWZ", w_vec.Ndz);
@@ -1673,8 +1685,9 @@ class ProjectorClass {
 		if (atomic_64bit) {
 			cl::string apu = CLDeviceID.getInfo<CL_DEVICE_EXTENSIONS>();
 			cl::string apu2 = "cl_khr_int64_base_atomics";
+			// NOTE: find returns npos when the extension is missing, size_t is unsigned (var < 0 is never true)
 			size_t var = apu.find(apu2);
-			if (var < 0) {
+			if (var == cl::string::npos) {
 				options.erase(pituus, options.size() + 1);
 				options += " -DCAST=float";
 				status = -1;
@@ -2093,6 +2106,8 @@ public:
 	AFDEVBUFF_t d_vX, d_vY, d_vZ;
 	AFDEVBUFF_t d_vector, d_input;
 	AFDEVBUFF_t d_im, d_rhs, d_U, d_refIm, d_RDPref;
+	// Sensitivity image used by fastPDHG
+	AFDEVBUFF_t d_precond;
 	AFDEVBUFF_t d_outputCT;
 	TEX2D_t d_maskFP, d_maskBP, d_maskPrior;
 	TEX3D_t d_maskBP3, d_maskPrior3;
@@ -2153,6 +2168,9 @@ public:
 	// The downside is that multi-resolution case uses more memory now
 	std::vector<CUarray> FPArrayCache;
 	std::vector<CUtexObject> FPTexCache;
+	// Texture object for fastPDHG when using FPType == 4 --> priors require same texture but integer coordinates
+	// with nearest neighbor
+	std::vector<CUtexObject> FPTexCachePrior;
 	std::vector<CUarray> intArrayCacheXY;
 	std::vector<CUtexObject> intTexCacheXY;
 	std::vector<CUarray> intArrayCacheYZ;
@@ -2178,6 +2196,25 @@ public:
 	// Cached dimensions of the persistent BP input image/texture (third entry 0 = not yet created)
 	size_t BPImageDims[3] = { 0, 0, 0 };
 	// ==== End Mod additions ====
+	// fastPDHG requirements
+	// Set to 1 only for the backprojections of the actual reconstruction loop
+	// The same kernel is also used for the sensitivity image and the power method, where the image estimate must not be touched
+	uint8_t fastStep = 0;
+	uint8_t fastPositivity = 0;
+	// Boolean value to determine whether regularization is used (NLM, RDP, GGMRF, hyperbolic prior, gradient-based TV)
+	bool fastNLMUsed = false;
+	// 0 = PDHG (and its variants, default), 1 = Poisson (PKMA/MBSREM/BSREM)
+	uint8_t fastAlg = 0;
+	// Scalar values required specifically for the fastPDHG
+	float fastTheta = 0.f, fastTau = 0.f, fastBeta = 0.f, fastEpps = 1e-6f;
+	// Poisson-algorithm (PKMA/MBSREM/BSREM) relaxation parameter and alphaM (PKMA) / U (MBSREM) / 1 (BSREM)
+	float fastLambda = 0.f, fastAlpha = 1.f;
+	// Prior parameters, always passed as a block: h (sigma^2), gamma, GGMRF p/q/c and the adaptive NLM constant
+	float fastNLM[6] = { 1.f, 1.f, 0.f, 0.f, 0.f, 0.f };
+	// largeDim axial offsets
+	// Only for largeDim cases
+	int64_t fastImOffset = 0;
+	int fastPriorZOffset = 0;
 #if defined(CUDA) || defined(HIP)
 	~ProjectorClass() {
 		if (memAlloc.FPMod)
@@ -2324,6 +2361,8 @@ public:
 		for (size_t kk = 0; kk < FPTexCache.size(); kk++) {
 			if (imageCacheDims[kk * 3 + 2] != 0) {
 				getErrorString(cuTexObjectDestroy(FPTexCache[kk]));
+				if (kk < FPTexCachePrior.size())
+					getErrorString(cuTexObjectDestroy(FPTexCachePrior[kk]));
 				getErrorString(cuArrayDestroy(FPArrayCache[kk]));
 			}
 		}
@@ -2449,6 +2488,174 @@ public:
 		return 0;
 	}
 
+#ifndef METAL
+#if defined(CUDA) || defined(HIP)
+	// Emits the build options for fastPDHG. nVoxZ is the number of voxels one work-item handles in z
+	inline void addFastPDHGOptions(std::vector<std::string> & os_options, const scalarStruct & inputScalars, const Weighting & w_vec,
+		const RecMethods & MethodList, const size_t nVoxZ) {
+#else
+	inline void addFastPDHGOptions(std::string & os_options, const scalarStruct & inputScalars, const Weighting & w_vec,
+		const RecMethods & MethodList, const size_t nVoxZ) {
+#endif
+		ADD_OPT(os_options, "-DFASTPDHG");
+		// Determine the algorithm and set the proper definitions
+		const bool poissonAlg = MethodList.PKMA || MethodList.MBSREM || MethodList.BSREM;
+		if (poissonAlg) {
+			fastAlg = 1;
+			ADD_OPT_INT(os_options, "-DFASTALG", 1);
+			if (MethodList.PKMA) {
+				ADD_OPT(os_options, "-DPKMA");
+			}
+			else if (MethodList.MBSREM) {
+				ADD_OPT(os_options, "-DMBSREM");
+			}
+			else if (MethodList.BSREM) {
+				ADD_OPT(os_options, "-DBSREM");
+			}
+		}
+		else
+			fastAlg = 0;
+		// BSREM does preconditioning only after all subiterations are complete
+		if (!MethodList.BSREM) {
+		if (w_vec.precondTypeIm[0]) {
+			ADD_OPT_INT(os_options, "-DFASTPRECOND", 1);
+		}
+		else if (w_vec.precondTypeIm[1]) {
+			ADD_OPT_INT(os_options, "-DFASTPRECOND", 2);
+		}
+		// Whether the NLM exclusive local memory caching with patch window is used or not
+		bool nlmTileZEmitted = false;
+		// Determine whether the local memory cache can be used
+		// Usually GPUs offer 48 kB of local memory so large neighborhoods and large NVOXELS can cause
+		// the local memory to run out
+		// This would require 12032 or more elements such as 13x13x11 window with NVOXELS = 8
+		// This would be Ndx = Ndy = 6 and Ndz = 5
+		// NLM, however, expands this with Nlx as well
+		// TODO: Decrease NVOXELS if the cache is too big?
+		auto addFastSWLocalCache = [&](const bool anatomical) {
+			if (!FASTNLMLOCALCACHE || anatomical)
+				return;
+			const size_t cacheSize = (local_size[0] + 2ULL * w_vec.Ndx) * (local_size[1] + 2ULL * w_vec.Ndy)
+				* (nVoxZ + 2ULL * w_vec.Ndz) * sizeof(float);
+			// The tile is guaranteed to fit: addProjector disables fastPDHG outright when it would exceed
+			// the 47 kB budget, so there is no texture fallback here any more.
+			ADD_OPT(os_options, "-DFASTSWLOCAL");
+			if (!nlmTileZEmitted) {
+				ADD_OPT_INT(os_options, "-DFASTNLMTILEZ", nVoxZ);
+				nlmTileZEmitted = true;
+			}
+			if (DEBUG) {
+				mexPrintBase("Caching the search-window neighborhood of fastPDHG in local memory, %u bytes per work-group\n", static_cast<uint32_t>(cacheSize));
+				mexEval();
+			}
+		};
+		// The NLM prior is only included when it was actually selected
+		if (MethodList.NLM) {
+			fastNLMUsed = true;
+			ADD_OPT(os_options, "-DFASTNLM");
+			if (w_vec.NLM_MRP) {
+				ADD_OPT_INT(os_options, "-DNLTYPE", 2);
+			}
+			else if (w_vec.NLTV) {
+				ADD_OPT_INT(os_options, "-DNLTYPE", 1);
+			}
+			else if (w_vec.NLRD) {
+				ADD_OPT_INT(os_options, "-DNLTYPE", 3);
+			}
+			else if (w_vec.NLLange) {
+				ADD_OPT_INT(os_options, "-DNLTYPE", 4);
+			}
+			else if (w_vec.NLLangeFiltered) {
+				ADD_OPT_INT(os_options, "-DNLTYPE", 5);
+			}
+			else if (w_vec.NLGGMRF) {
+				ADD_OPT_INT(os_options, "-DNLTYPE", 6);
+			}
+			else {
+				ADD_OPT_INT(os_options, "-DNLTYPE", 0);
+			}
+			if (w_vec.NLAdaptive)
+				ADD_OPT(os_options, "-DNLMADAPTIVE");
+			if (w_vec.NLM_anatomical)
+				ADD_OPT(os_options, "-DNLMREF");
+			ADD_OPT_INT(os_options, "-DSWINDOWX", w_vec.Ndx);
+			ADD_OPT_INT(os_options, "-DSWINDOWY", w_vec.Ndy);
+			ADD_OPT_INT(os_options, "-DSWINDOWZ", w_vec.Ndz);
+			ADD_OPT_INT(os_options, "-DPWINDOWX", w_vec.Nlx);
+			ADD_OPT_INT(os_options, "-DPWINDOWY", w_vec.Nly);
+			ADD_OPT_INT(os_options, "-DPWINDOWZ", w_vec.Nlz);
+			// Same as above, but for NLM
+			// The only difference is the inclusion of the patch size Nlx
+			// This means that the larger the patch size, the smaller the search window can be
+			// without risking going out of memory
+			// TODO: Decrease NVOXELS if the cache is too big?
+			if (FASTNLMLOCALCACHE) {
+				const size_t cacheSize = (local_size[0] + 2ULL * (w_vec.Ndx + w_vec.Nlx))
+					* (local_size[1] + 2ULL * (w_vec.Ndy + w_vec.Nly))
+					* (nVoxZ + 2ULL * (w_vec.Ndz + w_vec.Nlz)) * sizeof(float) * (w_vec.NLM_anatomical ? 2ULL : 1ULL);
+				// The tile is guaranteed to fit: addProjector disables fastPDHG outright when it would exceed
+				// the 47 kB budget, so there is no texture fallback here any more.
+				ADD_OPT(os_options, "-DFASTNLMLOCAL");
+				ADD_OPT_INT(os_options, "-DFASTNLMTILEZ", nVoxZ);
+				nlmTileZEmitted = true;
+				if (DEBUG) {
+					mexPrintBase("Caching the NLM neighborhood of fastPDHG in local memory, %u bytes per work-group\n", static_cast<uint32_t>(cacheSize));
+					mexEval();
+				}
+			}
+		}
+		// The RDP prior is only included when it was actually selected
+		// RDP reads its neighborhood from the FP cache texture, or, for the "with corners" variant, 
+		// optionally from a local-memory cache.
+		else if (MethodList.RDP) {
+			fastNLMUsed = true;
+			ADD_OPT(os_options, "-DFASTRDP");
+			if (w_vec.RDPLargeNeighbor) {
+				ADD_OPT(os_options, "-DFASTRDPCORNERS");
+				ADD_OPT_INT(os_options, "-DSWPRIORTYPE", 0);
+				ADD_OPT_INT(os_options, "-DSWINDOWX", w_vec.Ndx);
+				ADD_OPT_INT(os_options, "-DSWINDOWY", w_vec.Ndy);
+				ADD_OPT_INT(os_options, "-DSWINDOWZ", w_vec.Ndz);
+				addFastSWLocalCache(w_vec.RDP_anatomical);
+			}
+			if (w_vec.RDP_anatomical)
+				ADD_OPT(os_options, "-DPRIORREF");
+		}
+		// Same as above with corners
+		else if (MethodList.GGMRF) {
+			fastNLMUsed = true;
+			ADD_OPT(os_options, "-DFASTGGMRF");
+			ADD_OPT_INT(os_options, "-DSWPRIORTYPE", 1);
+			ADD_OPT_INT(os_options, "-DSWINDOWX", w_vec.Ndx);
+			ADD_OPT_INT(os_options, "-DSWINDOWY", w_vec.Ndy);
+			ADD_OPT_INT(os_options, "-DSWINDOWZ", w_vec.Ndz);
+			addFastSWLocalCache(false);
+		}
+		// Same as above
+		else if (MethodList.hyperbolic) {
+			fastNLMUsed = true;
+			ADD_OPT(os_options, "-DFASTHYPER");
+			ADD_OPT_INT(os_options, "-DSWPRIORTYPE", 2);
+			ADD_OPT_INT(os_options, "-DSWINDOWX", w_vec.Ndx);
+			ADD_OPT_INT(os_options, "-DSWINDOWY", w_vec.Ndy);
+			ADD_OPT_INT(os_options, "-DSWINDOWZ", w_vec.Ndz);
+			addFastSWLocalCache(false);
+		}
+		// TV includes a lot of different variants, but only the ones without reference images
+		// are supported by fastPDHG
+		// These include "normal" TV type and TV types 2 and 4
+		else if (MethodList.TV) {
+			fastNLMUsed = true;
+			ADD_OPT(os_options, "-DFASTTV");
+			if (w_vec.data.TVtype == 4)
+				ADD_OPT(os_options, "-DSATV");
+			else if (w_vec.data.TVtype == 2)
+				ADD_OPT(os_options, "-DJPTV");
+		}
+		} // end !MethodList.BSREM
+	}
+#endif // END METAL
+
 	/// <summary>
 	/// This function creates the projector class object
 	/// </summary>
@@ -2523,6 +2730,12 @@ public:
 #else
 		status = clGetPlatformsContext(inputScalars.platform, CLContext, CLCommandQueue, inputScalars.usedDevices, CLDeviceID);
 #endif
+		// Force OpenCL CPUs to use buffers
+		// Images tend to be much slower on CPUs
+		const cl_device_type devType = CLDeviceID[0].getInfo<CL_DEVICE_TYPE>(&status);
+		if ((devType & CL_DEVICE_TYPE_CPU) && inputScalars.useImages) {
+			inputScalars.useImages = false;
+		}
 		// For NVIDIA cards, 32 local size seems more optimal with 1D kernelFP (unless the user gave an explicit value)
 		std::string deviceName = CLDeviceID[0].getInfo<CL_DEVICE_VENDOR>(&status);
 		std::string NV("NVIDIA Corporation");
@@ -2540,6 +2753,41 @@ public:
 			mexEval();
 		}
 #endif // END CUDA
+		// Use the prior local sizes
+		// TODO: Make the prior local size adjustable
+#ifndef METAL
+		if (inputScalars.fastPDHG && (inputScalars.BPType == 4 || inputScalars.BPType == 5)) {
+			local_size[0] = local_sizePrior[0];
+			local_size[1] = local_sizePrior[1];
+			local_size[2] = 1ULL;
+		}
+		// Check whether the prior local neighborhood can be cached in local memory
+		// If not, disable fastPDHG
+		if (inputScalars.fastPDHG && FASTNLMLOCALCACHE && (inputScalars.BPType == 4 || inputScalars.BPType == 5)) {
+			const size_t nVoxZ = (inputScalars.BPType == 5) ? (inputScalars.pitch ? 1ULL : static_cast<size_t>(NVOXELS5))
+				: (inputScalars.useHelical ? static_cast<size_t>(NVOXELSHELICAL) : static_cast<size_t>(NVOXELS));
+			size_t cacheSize = 0ULL;
+			int memLoc = 0;
+#if defined(CUDA) || defined(HIP)
+			cuDeviceGetAttribute(&memLoc, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK, CUDeviceID[0]);
+#elif defined(OPENCL)
+			memLoc = static_cast<int>(CLDeviceID[0].getInfo<CL_DEVICE_LOCAL_MEM_SIZE>(&status));
+#endif // END CUDA
+			if (MethodList.NLM)
+				cacheSize = (local_size[0] + 2ULL * (w_vec.Ndx + w_vec.Nlx)) * (local_size[1] + 2ULL * (w_vec.Ndy + w_vec.Nly))
+					* (nVoxZ + 2ULL * (w_vec.Ndz + w_vec.Nlz)) * sizeof(float) * (w_vec.NLM_anatomical ? 2ULL : 1ULL);
+			else if ((MethodList.RDP && w_vec.RDPLargeNeighbor && !w_vec.RDP_anatomical) || MethodList.GGMRF || MethodList.hyperbolic)
+				cacheSize = (local_size[0] + 2ULL * w_vec.Ndx) * (local_size[1] + 2ULL * w_vec.Ndy)
+					* (nVoxZ + 2ULL * w_vec.Ndz) * sizeof(float);
+			if (cacheSize >= memLoc - 1024ULL) {
+				inputScalars.fastPDHG = false;
+				if (DEBUG) {
+					mexPrintBase("fastPDHG disabled: the fused prior's local-memory tile needs %u bytes per work-group, which exceeds the limit. Using the regular (multi-step) path.\n", static_cast<uint32_t>(cacheSize));
+					mexEval();
+				}
+			}
+		}
+#endif
 #if defined(CUDA) || defined(HIP)
 		if (DEBUG || inputScalars.verbose >= 3) {
 			mexPrint("CUDA programs successfully created\n");
@@ -2734,9 +2982,10 @@ public:
 			CHECK(status, "\n", (STATUS_t)(-1));
 			memAlloc.NLMRef = inputScalars.useImages ? 1 : 2;
 		}
-		// The input image for numerous regularization
-		// We define the image here and later input the current estimate to this image
-		if (MethodList.NLM || MethodList.RDP || MethodList.TV || MethodList.GGMRF || MethodList.APLS || MethodList.hyperbolic || inputScalars.projector_type == 6) {
+		// Create the prior image copy if needed, reuse the forward projection one otherwise
+		// We define the image here and later input the current estimate to this image, if necessary
+		if (inputScalars.projector_type == 6 || (inputScalars.FPType == 5 &&
+			(MethodList.NLM || MethodList.RDP || MethodList.TV || MethodList.GGMRF || MethodList.APLS || MethodList.hyperbolic))) {
 			if (inputScalars.useImages && !inputScalars.largeDim) {
 				CREATE_FLOAT_TEXTURE3D_EMPTY(d_inputI, imArray, region[0], region[1], region[2]);
 				CHECK(status, "Failed to create prior image\n", (STATUS_t)(-1));
@@ -2801,9 +3050,20 @@ public:
 			if (inputScalars.maskFP || inputScalars.maskBP) {
 				if (inputScalars.maskFP) {
 					if (inputScalars.useBuffers) {
-						d_maskFPB.resize(inputScalars.subsetsUsed);
-						for (uint32_t kk = inputScalars.osa_iter0; kk < inputScalars.subsetsUsed; kk++)
-							ALLOC_BUFFER(d_maskFPB[kk], CL_MEM_READ_ONLY, sizeof(uint8_t) * inputScalars.nRowsD * inputScalars.nColsD * length[kk]);
+						// As with the textures below, a 3D mask is stored per subset while a 2D mask is a
+						// single mask shared by every subset (bound as d_maskFPB[0])
+						if (inputScalars.maskFPZ > 1) {
+							d_maskFPB.resize(inputScalars.subsetsUsed);
+							for (uint32_t kk = inputScalars.osa_iter0; kk < inputScalars.subsetsUsed; kk++) {
+								ALLOC_BUFFER(d_maskFPB[kk], CL_MEM_READ_ONLY, sizeof(uint8_t) * inputScalars.nRowsD * inputScalars.nColsD * length[kk]);
+								CHECK(status, "\n", (STATUS_t)(-1));
+							}
+						}
+						else {
+							d_maskFPB.resize(1);
+							ALLOC_BUFFER(d_maskFPB[0], CL_MEM_READ_ONLY, sizeof(uint8_t) * inputScalars.nRowsD * inputScalars.nColsD);
+							CHECK(status, "\n", (STATUS_t)(-1));
+						}
 					}
 					else {
 						if (inputScalars.maskFPZ > 1) {
@@ -3339,6 +3599,20 @@ public:
 				CHECK(status, "Failed to create Metal sensitivity placeholder\n", -1);
 				WRITE_BUFFER(d_Summ[ii], sizeof(zero), &zero);
 				CHECK(status, "Failed to initialize Metal sensitivity placeholder\n", -1);
+			}
+		}
+#elif defined(OPENCL)
+		// The sensitivity image is only allocated (through ArrayFire) when it is actually computed
+		// On GPUs, it doesn't matter if d_Summ is not allocated if it's not used, but with CPUs
+		// it needs to be allocated
+		// This affects all algorithms that don't specifically compute the sensitivity image
+		if (d_Summ.size() < static_cast<size_t>(inputScalars.nMultiVolumes) + 1ULL)
+			d_Summ.resize(inputScalars.nMultiVolumes + 1);
+		for (uint32_t ii = 0; ii <= inputScalars.nMultiVolumes; ++ii) {
+			// Only the entries that are not already backed by an ArrayFire allocation
+			if (d_Summ[ii]() == NULL) {
+				ALLOC_BUFFER(d_Summ[ii], CL_MEM_READ_WRITE, sizeof(float));
+				OCL_CHECK(status, "Failed to create the sensitivity image placeholder\n", -1);
 			}
 		}
 #endif // END METAL
@@ -4235,12 +4509,14 @@ public:
 	/// <param name="compSens if true, computes the sensitivity image as well"></param>
 	/// <returns></returns>
 #if defined(CUDA) || defined(HIP)
-	inline int backwardProjection(scalarStruct & inputScalars, Weighting & w_vec, uint32_t osa_iter, uint32_t timestep, 
-		std::vector<int64_t>&length, uint64_t m_size, const bool compSens = false, int ii = 0, const int uu = 0,
+	inline int backwardProjection(scalarStruct & inputScalars, Weighting & w_vec, uint32_t osa_iter, uint32_t timestep,
+		std::vector<int64_t>&length, uint64_t m_size, const RecMethods & MethodList = RecMethods(), const bool compSens = false, int ii = 0, const int uu = 0,
 		const int queueIdx = 0, const bool newInput = true) {
 #elif defined(METAL) || defined(OPENCL)
-	inline int backwardProjection(const scalarStruct & inputScalars, Weighting & w_vec, const uint32_t osa_iter, const uint32_t timestep, 
-		const std::vector<int64_t>&length, const uint64_t m_size, const bool compSens = false, const int32_t ii = 0, const int uu = 0,
+	// MethodList defaults to an empty RecMethods() so the METAL branch below keeps compiling unchanged
+	// TODO: Metal support for fastPDHG?
+	inline int backwardProjection(const scalarStruct & inputScalars, Weighting & w_vec, const uint32_t osa_iter, const uint32_t timestep,
+		const std::vector<int64_t>&length, const uint64_t m_size, const RecMethods & MethodList = RecMethods(), const bool compSens = false, const int32_t ii = 0, const int uu = 0,
 		int ee = -1, const int queueIdx = 0, const bool newInput = true) {
 #endif // END CUDA
 		if (inputScalars.verbose >= 3 || DEBUG)
@@ -5055,6 +5331,87 @@ public:
 				KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, osa_iter);
 			}
 			KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, ii);
+#ifndef METAL
+			// fastPDHG backprojection inputs
+			if (inputScalars.fastPDHG && inputScalars.CT && (inputScalars.BPType == 4 || inputScalars.BPType == 5)) {
+				// Input the PDHG backprojection update only in the case of PDHG type algorithm
+				// Add preconditioner if used
+				const bool fastPrecondActive = !MethodList.BSREM && (w_vec.precondTypeIm[0] || w_vec.precondTypeIm[1]);
+				if (fastStep != 0) {
+					if (fastAlg == 0)
+						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_U);
+					if (fastPrecondActive)
+						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_precond);
+				}
+				else {
+					if (fastAlg == 0)
+						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_output);
+					if (fastPrecondActive)
+						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_output);
+				}
+				if (fastNLMUsed) {
+					// Use either the same cached image texture as with FPTypes 1-4
+					if (fastStep == 0) {
+						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_inputImage);
+					}
+					// Or use the copy for FPType 5 or largeDim
+					else if (inputScalars.FPType == 5 || inputScalars.largeDim) {
+						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_inputI);
+					}
+					else {
+#if defined(CUDA) || defined(HIP)
+						KARG(kTemp, kernelBP, kernelIndBPSubIter, FPTexCachePrior[0]);
+#else
+						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_imageCache[0]);
+#endif // END CUDA
+					}
+					if (MethodList.NLM) {
+						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_gaussianNLM);
+						if (w_vec.NLM_anatomical)
+							KARG(kTemp, kernelBP, kernelIndBPSubIter, d_urefIm);
+						for (int nn = 0; nn < 6; nn++)
+							KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, fastNLM[nn]);
+					}
+					else if (MethodList.RDP) {
+						if (w_vec.RDPLargeNeighbor)
+							KARG(kTemp, kernelBP, kernelIndBPSubIter, d_weights);
+						KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, w_vec.RDP_gamma);
+						if (w_vec.RDP_anatomical)
+							// Anatomical reference image for RDP
+							KARG(kTemp, kernelBP, kernelIndBPSubIter, d_RDPrefI);
+					}
+					else if (MethodList.GGMRF) {
+						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_weights);
+						KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, w_vec.GGMRF_p);
+						KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, w_vec.GGMRF_q);
+						KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, w_vec.GGMRF_c);
+						KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, w_vec.GGMRF_pqc);
+					}
+					else if (MethodList.hyperbolic) {
+						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_weights);
+						KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, w_vec.data.SATVPhi);
+					}
+					else if (MethodList.TV) {
+						KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, w_vec.data.SATVPhi);
+					}
+				}
+				if (fastAlg == 0) {
+					KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, fastTheta);
+					KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, fastTau);
+				}
+				else {
+					KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, fastLambda);
+					KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, fastAlpha);
+				}
+				KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, fastBeta);
+				KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, fastEpps);
+				KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, fastPositivity);
+				// largeDim offsets
+				KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, fastImOffset);
+				KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, fastPriorZOffset);
+				KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, fastStep);
+			}
+#endif // END METAL
 			}
 		if (DEBUG || inputScalars.verbose >= 3)
 			START_TIMER(tStart);
@@ -5358,7 +5715,17 @@ public:
 		}
 		KARG(kArgs, kernelNLM, kernelIndNLM, d_W);
 		if (inputScalars.useImages) {
-			KARG(kArgs, kernelNLM, kernelIndNLM, d_inputI);
+			// FPType == 5 caches integral images rather than the estimate, so the prior uses its own copy
+			if (inputScalars.FPType == 5) {
+				KARG(kArgs, kernelNLM, kernelIndNLM, d_inputI);
+			}
+			else {
+#if defined(CUDA) || defined(HIP)
+				KARG(kArgs, kernelNLM, kernelIndNLM, FPTexCachePrior[kk]);
+#else
+				KARG(kArgs, kernelNLM, kernelIndNLM, d_imageCache[kk]);
+#endif
+			}
 		}
 		else {
 			KARG(kArgs, kernelNLM, kernelIndNLM, d_inputB);
@@ -5412,7 +5779,7 @@ public:
 		status = cuLaunchKernel(kernelNLM, globalPrior[0], globalPrior[1], globalPrior[2], localPrior[0], localPrior[1], localPrior[2], 0, CLCommandQueue[0], kArgs.data(), NULL);
 		CUDA_CHECK(status, "Failed to launch the NLM kernel\n", status);
 
-		if (inputScalars.useImages) {
+		if (inputScalars.useImages && inputScalars.FPType == 5) {
 			status = cuTexObjectDestroy(d_inputI);
 			if (status != CUDA_SUCCESS) {
 				getErrorString(status);
@@ -5498,7 +5865,17 @@ public:
 		}
 		KARG(kArgs, kernelRDP, kernelIndRDP, d_W);
 		if (inputScalars.useImages) {
-			KARG(kArgs, kernelRDP, kernelIndRDP, d_inputI);
+			// FPType == 5 caches integral images rather than the estimate, so the prior uses its own copy
+			if (inputScalars.FPType == 5) {
+				KARG(kArgs, kernelRDP, kernelIndRDP, d_inputI);
+			}
+			else {
+#if defined(CUDA) || defined(HIP)
+				KARG(kArgs, kernelRDP, kernelIndRDP, FPTexCachePrior[kk]);
+#else
+				KARG(kArgs, kernelRDP, kernelIndRDP, d_imageCache[kk]);
+#endif
+			}
 		}
 		else {
 			KARG(kArgs, kernelRDP, kernelIndRDP, d_inputB);
@@ -5546,13 +5923,15 @@ public:
 		CUDA_CHECK(status, "Failed to launch the RDP kernel\n", -1);
 
 		if (inputScalars.useImages) {
-			status = cuTexObjectDestroy(d_inputI);
-			if (status != CUDA_SUCCESS) {
-				getErrorString(status);
-			}
-			status = cuArrayDestroy(imArray);
-			if (status != CUDA_SUCCESS) {
-				getErrorString(status);
+			if (inputScalars.FPType == 5) {
+				status = cuTexObjectDestroy(d_inputI);
+				if (status != CUDA_SUCCESS) {
+					getErrorString(status);
+				}
+				status = cuArrayDestroy(imArray);
+				if (status != CUDA_SUCCESS) {
+					getErrorString(status);
+				}
 			}
 			if (RDPLargeNeighbor && useRDPRef) {
 				status = cuTexObjectDestroy(d_RDPrefI);
@@ -5639,7 +6018,17 @@ public:
 		}
 		KARG(kArgs, kernelGGMRF, kernelIndGGMRF, d_W);
 		if (inputScalars.useImages) {
-			KARG(kArgs, kernelGGMRF, kernelIndGGMRF, d_inputI);
+			// FPType == 5 caches integral images rather than the estimate, so the prior uses its own copy
+			if (inputScalars.FPType == 5) {
+				KARG(kArgs, kernelGGMRF, kernelIndGGMRF, d_inputI);
+			}
+			else {
+#if defined(CUDA) || defined(HIP)
+				KARG(kArgs, kernelGGMRF, kernelIndGGMRF, FPTexCachePrior[kk]);
+#else
+				KARG(kArgs, kernelGGMRF, kernelIndGGMRF, d_imageCache[kk]);
+#endif
+			}
 		}
 		else {
 			KARG(kArgs, kernelGGMRF, kernelIndGGMRF, d_inputB);
@@ -5672,7 +6061,7 @@ public:
 		status = cuLaunchKernel(kernelGGMRF, globalPrior[0], globalPrior[1], globalPrior[2], localPrior[0], localPrior[1], localPrior[2], 0, CLCommandQueue[0], kArgs.data(), NULL);
 		CUDA_CHECK(status, "Failed to launch the GGMRF kernel\n", -1);
 
-		if (inputScalars.useImages) {
+		if (inputScalars.useImages && inputScalars.FPType == 5) {
 			status = cuTexObjectDestroy(d_inputI);
 			if (status != CUDA_SUCCESS) {
 				getErrorString(status);
@@ -6221,7 +6610,17 @@ public:
 		//FINISH_QUEUE(status, "\n", -1);
 		KARG(kArgs, kernelHyper, kernelIndHyper, d_W);
 		if (inputScalars.useImages) {
-			KARG(kArgs, kernelHyper, kernelIndHyper, d_inputI);
+			// FPType == 5 caches integral images rather than the estimate, so the prior uses its own copy
+			if (inputScalars.FPType == 5) {
+				KARG(kArgs, kernelHyper, kernelIndHyper, d_inputI);
+			}
+			else {
+#if defined(CUDA) || defined(HIP)
+				KARG(kArgs, kernelHyper, kernelIndHyper, FPTexCachePrior[kk]);
+#else
+				KARG(kArgs, kernelHyper, kernelIndHyper, d_imageCache[kk]);
+#endif
+			}
 		}
 		else {
 			KARG(kArgs, kernelHyper, kernelIndHyper, d_inputB);
@@ -6263,7 +6662,7 @@ public:
 		CUDA_CHECK(status, "Failed to launch the hyperbolic prior gradient kernel\n", -1);
 
 		//FINISH_QUEUE(status, "Queue finish failed after hyperbolic prior gradient kernel\n", -1);
-		if (inputScalars.useImages) {
+		if (inputScalars.useImages && inputScalars.FPType == 5) {
 			status = cuTexObjectDestroy(d_inputI);
 			if (status != CUDA_SUCCESS) {
 				getErrorString(status);
@@ -6345,7 +6744,17 @@ public:
 #endif // END CUDA
 		KARG(kArgs, kernelTV, kernelIndTV, d_W);
 		if (inputScalars.useImages) {
-			KARG(kArgs, kernelTV, kernelIndTV, d_inputI);
+			// FPType == 5 caches integral images rather than the estimate, so the prior uses its own copy
+			if (inputScalars.FPType == 5) {
+				KARG(kArgs, kernelTV, kernelIndTV, d_inputI);
+			}
+			else {
+#if defined(CUDA) || defined(HIP)
+				KARG(kArgs, kernelTV, kernelIndTV, FPTexCachePrior[kk]);
+#else
+				KARG(kArgs, kernelTV, kernelIndTV, d_imageCache[kk]);
+#endif
+			}
 		}
 		else {
 			KARG(kArgs, kernelTV, kernelIndTV, d_inputB);
@@ -6382,7 +6791,7 @@ public:
 		status = cuLaunchKernel(kernelTV, globalPrior[0], globalPrior[1], globalPrior[2], localPrior[0], localPrior[1], localPrior[2], 0, CLCommandQueue[0], kArgs.data(), NULL);
 		CUDA_CHECK(status, "Failed to launch the TV gradient kernel\n", -1);
 		//FINISH_QUEUE(status, "Queue finish failed after TV gradient kernel\n", -1);
-		if (inputScalars.useImages) {
+		if (inputScalars.useImages && inputScalars.FPType == 5) {
 			status = cuTexObjectDestroy(d_inputI);
 			if (status != CUDA_SUCCESS) {
 				getErrorString(status);

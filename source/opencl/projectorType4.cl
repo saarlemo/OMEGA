@@ -753,11 +753,37 @@ void projectorType4Forward(
 * d_nProjections = Number of projections/sinograms,
 * ii = The current volume, for multi-resolution reconstruction, 0 can be used when not using multi-resolution
 *
+* When FASTPDHG is defined, the whole image-domain part of the (subset-based) PDHG update -- or, when FASTALG == 1,
+* one of the Poisson algorithms (PKMA/MBSREM/BSREM, see PoissonUpdateVoxel) -- is computed in this same kernel,
+* right after the backprojection value of the voxel is known. In that case the following are also input:
+* d_U = the PDHG dual/auxiliary image (uCP), read and written (FASTALG == 0 only -- the Poisson algorithms have
+*       no uCP),
+* d_precond = the sensitivity image used by the image-based preconditioners 0 and 1 (FASTPRECOND > 0 only),
+* d_gaussian = the Gaussian patch weights of the NLM prior (FASTNLM only),
+* d_uref = the anatomical reference image of the NLM prior (FASTNLM + NLMREF only),
+* d_swWeight = the RDP/GGMRF/hyperbolic distance weights (FASTRDP + FASTRDPCORNERS, FASTGGMRF or FASTHYPER only),
+* fastRDPgamma = the RDP edge-preservation parameter (FASTRDP only),
+* fastGGMRFp/q/c/pqc = the GGMRF shape parameters (FASTGGMRF only),
+* fastHYPERsigma = the hyperbolic prior's edge parameter (FASTHYPER only),
+* fastTVsigma = the TV prior's sigma parameter, i.e. w_vec.data.SATVPhi (FASTTV only -- standard/SATV/JPTV
+*               only, no local weights or search window; TVGradient reads the estimate texture directly),
+* fastTheta = subsetsUsed * thetaCP of the current sub-iteration (FASTALG == 0 only),
+* fastTau = the primal step size (FASTALG == 0 only),
+* fastLambda = the relaxation parameter of the fused Poisson algorithm (FASTALG == 1 only),
+* fastAlpha = alphaM (PKMA), U (MBSREM) or 1 (BSREM) (FASTALG == 1 only),
+* fastBeta = the regularization parameter of the fused prior (NLM or RDP). Zero skips the prior entirely
+*            (always zero, and no prior compiled in, for BSREM),
+* fastEpps = the small value used as the lower bound when positivity is enforced,
+* fastPositivity = if 1, positivity is enforced,
+* fastStep = if 0, this kernel behaves exactly as without FASTPDHG. Needed because the same kernel also computes
+*            e.g. the sensitivity image and the power method, where no image update may be done.
+*
 * OUTPUTS:
-* d_OSEM = backprojection,
+* d_OSEM = backprojection, or, when the fused PDHG step is used (fastStep = 1), the new image estimate
 *******************************************************************************************************************************************/
 
 #if defined(BP) && defined(CT)// START BP
+
 KERNEL2
 void projectorType4Backward(
 #if defined(METAL)
@@ -827,6 +853,62 @@ void projectorType4Backward(
 #if !defined(METAL) // Scalars
     , const LONG d_nProjections
     , const int ii
+#ifdef FASTPDHG // START FASTPDHG
+#if FASTALG == 0
+    , CLGLOBAL float* CLRESTRICT d_U
+#endif
+#if FASTPRECOND > 0
+    , const CLGLOBAL float* CLRESTRICT d_precond
+#endif
+#ifdef FASTNLM
+    , IMAGE3D d_imNLM
+    , CONSTANT float* d_gaussian
+#ifdef NLMREF
+    , IMAGE3D d_urefNLM
+#endif
+    // The NLM parameters are always passed as a fixed block (h, gamma, p, q, c, adaptive constant) so that the host
+    // side does not have to mirror the NLTYPE conditionals
+    , const float fastNLMh, const float fastNLMgamma, const float fastNLMp, const float fastNLMq, const float fastNLMc, const float fastNLMs
+#endif
+#ifdef FASTRDP
+    , IMAGE3D d_imNLM
+#ifdef FASTRDPCORNERS
+    , CONSTANT float* d_swWeight
+#endif
+    , const float fastRDPgamma
+#ifdef PRIORREF
+    , IMAGE3D d_urefNLM
+#endif
+#endif // FASTRDP
+#ifdef FASTGGMRF
+    , IMAGE3D d_imNLM
+    , CONSTANT float* d_swWeight
+    , const float fastGGMRFp, const float fastGGMRFq, const float fastGGMRFc, const float fastGGMRFpqc
+#endif // FASTGGMRF
+#ifdef FASTHYPER
+    , IMAGE3D d_imNLM
+    , CONSTANT float* d_swWeight
+    , const float fastHYPERsigma
+#endif // FASTHYPER
+#ifdef FASTTV
+    , IMAGE3D d_imNLM
+    , const float fastTVsigma
+#endif // FASTTV
+#if FASTALG == 0
+    , const float fastTheta
+    , const float fastTau
+#else
+    , const float fastLambda
+    , const float fastAlpha
+#endif
+    , const float fastBeta
+    , const float fastEpps
+    , const uchar fastPositivity
+    // largeDim offsets
+    , const LONG fastImOffset
+    , const int fastPriorZOffset
+    , const uchar fastStep
+#endif // END FASTPDHG
 #else
     , uint3 temp_i [[thread_position_in_grid]] // global id
 #endif
@@ -847,6 +929,32 @@ void projectorType4Backward(
 #ifdef PYTHON
 	const uint3 d_N = make_uint3(d_Nx, d_Ny, d_Nz);
 #endif
+#if defined(FASTPDHG) && defined(FASTNLM) && defined(FASTNLMLOCAL) // START FASTNLMLOCAL
+    // Cache the NLM neighborhood before the bounds check so the barrier is reached by all work-items. The
+    // estimate is not written by this kernel (the update goes to d_OSEM), so the cache stays valid.
+    LOCAL float lCacheF[NLM_TILEX * NLM_TILEY * NLM_TILEZ];
+#ifdef NLMREF
+    LOCAL float lCacheRefF[NLM_TILEX * NLM_TILEY * NLM_TILEZ];
+#endif
+    if (fastStep != 0u && fastBeta != FLOAT_ZERO && ii == 0)
+        fastFillNLMCache(lCacheF,
+#ifdef NLMREF
+            lCacheRefF,
+#endif
+            d_imNLM,
+#ifdef NLMREF
+            d_urefNLM,
+#endif
+            CINT(i.z), fastPriorZOffset
+        );
+    BARRIER
+#endif // END FASTNLMLOCAL
+#if defined(FASTPDHG) && defined(FASTSWLOCAL) // START FASTSWLOCAL
+    LOCAL float lCacheSW[SW_TILEX * SW_TILEY * SW_TILEZ];
+    if (fastStep != 0u && fastBeta != FLOAT_ZERO && ii == 0)
+        fastFillSWCache(lCacheSW, d_imNLM, CINT(i.z), fastPriorZOffset);
+    BARRIER
+#endif // END FASTSWLOCAL
     if (i.x >= d_N.x || i.y >= d_N.y || i.z >= d_N.z)
         return;
     size_t idx = GID0 + GID1 * d_N.x + GID2 * nVoxels * d_N.y * d_N.x;
@@ -1213,6 +1321,78 @@ void projectorType4Backward(
 #endif
 #endif
     }
+	// Start the fastPDHG computations
+#ifdef FASTPDHG // START FASTPDHG
+    if (fastStep != 0u) {
+        fastPDHGUpdate(temp, wSum, i, idx, d_N, nVoxels, no_norm, ii,
+            fastImOffset, fastPriorZOffset,
+#if FASTALG == 0
+            d_U,
+#endif
+            d_OSEM, d_Summ,
+#if FASTPRECOND > 0
+            d_precond,
+#endif
+#ifdef FASTNLM
+            d_gaussian,
+#ifdef FASTNLMLOCAL
+            lCacheF,
+#ifdef NLMREF
+            lCacheRefF,
+#endif
+#else
+            d_imNLM,
+#ifdef NLMREF
+            d_urefNLM,
+#endif
+#endif
+            fastNLMh,
+#if NLTYPE >= 3
+            fastNLMgamma,
+#endif
+#if NLTYPE == 6
+            fastNLMp, fastNLMq, fastNLMc,
+#endif
+#ifdef NLMADAPTIVE
+            fastNLMs,
+#endif
+#endif // FASTNLM
+#ifdef FASTSWLOCAL
+            lCacheSW,
+#endif
+#ifdef FASTRDP
+            d_imNLM,
+#ifdef FASTRDPCORNERS
+            d_swWeight,
+#endif
+            fastRDPgamma,
+#ifdef PRIORREF
+            d_urefNLM,
+#endif
+#endif // FASTRDP
+#ifdef FASTGGMRF
+            d_imNLM,
+            d_swWeight,
+            fastGGMRFp, fastGGMRFq, fastGGMRFc, fastGGMRFpqc,
+#endif // FASTGGMRF
+#ifdef FASTHYPER
+            d_imNLM,
+            d_swWeight,
+            fastHYPERsigma,
+#endif // FASTHYPER
+#ifdef FASTTV
+            d_imNLM,
+            fastTVsigma,
+#endif // FASTTV
+#if FASTALG == 0
+            fastTheta, fastTau,
+#else
+            fastLambda, fastAlpha,
+#endif
+            fastBeta, fastEpps, fastPositivity);
+        return;
+    }
+#endif // END FASTPDHG
     for (int zz = 0; zz < nVoxels; zz++) {
         const uint ind = i.z + zz;
         if (ind >= d_N.z)

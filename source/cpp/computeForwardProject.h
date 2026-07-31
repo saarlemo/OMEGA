@@ -6,7 +6,7 @@ inline int computeForwardStep(const RecMethods& MethodList, af::array& y, af::ar
 	if (DEBUG || inputScalars.verbose >= 3) {
 		proj.tStartLocal = std::chrono::steady_clock::now();
 	}
-	af::deviceGC();
+	//af::deviceGC();
 	int status = 0;
 	af::array indeksit;
 	bool indS = false;

@@ -4,9 +4,11 @@
 inline int MRP(const af::array& im, const uint32_t medx, const uint32_t medy, const uint32_t medz, const scalarStruct& inputScalars,
 	ProjectorClass& proj, af::array& dU, const float beta, const bool med_no_norm = false) {
 	int status = 0;
-	af::array padd = padding(im, inputScalars.Nx[0], inputScalars.Ny[0], inputScalars.Nz[0], medx, medy, medz);
+	// Prevent out of bounds cases for the (rare) 2D cases
+	const uint32_t medzEff = inputScalars.Nz[0] == 1 ? 0U : medz;
+	af::array padd = padding(im, inputScalars.Nx[0], inputScalars.Ny[0], inputScalars.Nz[0], medx, medy, medzEff);
 	af::array grad = af::constant(0.f, im.elements());
-	status = MRPAF(padd, grad, inputScalars, proj, medx, medy, medz);
+	status = MRPAF(padd, grad, inputScalars, proj, medx, medy, medzEff);
 	if (status != 0)
 		return -1;
 	if (med_no_norm)

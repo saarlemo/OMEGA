@@ -70,6 +70,9 @@ typedef struct structForScalars {
 		computeRelaxation = false, storeFP = false, deconvolution = false, CTAttenuation = true, largeDim = false, storeResidual = false,
 		useBuffers = true, useFDKWeights = false, indexBased = false, FISTAAcceleration = false, stochastic = false, useTotLength = true,
 		useParallelBeam = false, useHelical = false;
+	// Set this to false to explicitly disable fastPDHG
+	// On MATLAB/Octave, you can do this just with options.fastPDHG = false;
+	bool fastPDHG = true;
 	int64_t Nf = 0;
 	std::vector<CTYPE3> d_Scale;
 	std::vector<CTYPE3> d_Scale4;

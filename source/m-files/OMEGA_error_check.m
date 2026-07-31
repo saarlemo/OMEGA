@@ -239,7 +239,7 @@ if options.projector_type > 6 && ~ismember(options.projector_type, ...
         [11 12 13 14 15 21 22 23 24 25 31 32 33 34 35 41 42 43 44 45 51 54 55])
     error('The selected projector type is not supported!')
 end
-if options.use_CPU && options.projector_type ~= 1 && options.implementation == 2
+if options.use_CPU && ~ismember(options.projector_type, [11 1]) && options.implementation == 2
     error('Selected projector type is not supported with CPU implementation!')
 end
 if sum(options.precondTypeImage) == 0 && (options.PKMA || options.MRAMLA || options.MBSREM)

@@ -55,7 +55,7 @@
 /// <param name="n_rekos Number of selected reconstruction algorithms. NOT USED AT THE MOMENT! (optional)"></param>
 /// <returns></returns>
 template <typename T, typename F, typename R>
-int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* sc_ra, scalarStruct inputScalars, const uint32_t device, 
+int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* sc_ra, scalarStruct inputScalars, const uint32_t device,
     const int64_t* pituus, Weighting& w_vec, RecMethods& MethodList, const char* header_directory, const float* x0, T* cell, 
     T* FPcell = nullptr, const float* atten = nullptr, const float* norm = nullptr, const float* extraCorr = nullptr, const size_t size_gauss = 0,
 	const uint32_t* xy_index = nullptr, const uint16_t* z_index = nullptr, float* residual = nullptr, const uint16_t* L = nullptr, uint32_t n_rekos = 1) {
@@ -281,6 +281,10 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
         MethodList.ProxTGV || MethodList.ProxRDP || MethodList.GGMRF)
 		inputScalars.use64BitIndices = inputScalars.im_dim[0] > 2147483647LL;
 
+	// Check whether fastPDHG can be used
+	// This computes all image domain components in one go, except for BSREM
+	checkFastPDHG(inputScalars, w_vec, MethodList);
+
 	// Create the projector class that handles the projectors and all OpenCL/CUDA/Metal related functions
 	ProjectorClass proj;
 	status = proj.addProjector(inputScalars, w_vec, MethodList, header_directory);
@@ -288,6 +292,16 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
 		return -1;
 
 #ifndef CPU
+	// The regularization specific parameters of fastPDHG are constant throughout the reconstruction
+	if (inputScalars.fastPDHG && proj.fastNLMUsed) {
+		proj.fastNLM[0] = w_vec.h2;
+		proj.fastNLM[1] = w_vec.RDP_gamma;
+		proj.fastNLM[2] = w_vec.GGMRF_p;
+		proj.fastNLM[3] = w_vec.GGMRF_q;
+		proj.fastNLM[4] = w_vec.GGMRF_c;
+		proj.fastNLM[5] = w_vec.NLAdaptiveConstant;
+	}
+
 	// Multi-resolution backprojections can now run concurrently
 	// This creates the multi-volume/side queues/streams
     // GPU only! Though CPUs using OpenCL also utilize this
@@ -647,7 +661,7 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
                             if (inputScalars.projector_type == 6)
                                 backprojectionType6(inputM, w_vec, vec, inputScalars, length[indD], uu, proj, tt, subIter, 0, 0, 0, ii, atten);
                             else {
-                                status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, inputM, subIter, tt, length, lengthFull[indD], 
+                                status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, MethodList, inputM, subIter, tt, length, lengthFull[indD], 
                                     meanBP, g, proj, (inputScalars.listmode > 0 && inputScalars.computeSensImag), ii, pituus);
                                 if (status != 0) {
                                     return -1;
@@ -729,7 +743,7 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
                             oneInput = af::constant(1.f, lengthFull[indD] * nBins);
                             for (int kk = 0; kk < inputScalars.subsetsUsed; kk++) {
                                 largeDimFirst(inputScalars, proj, kk);
-                                status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, oneInput, subIter, timestep, length, 
+                                status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, MethodList, oneInput, subIter, timestep, length, 
                                     lengthFull[indD], meanBP, g, proj, false, 0, pituus);
                                 if (status != 0) {
                                     return -1;
@@ -753,7 +767,7 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
                             int indD = subIter + timestep * inputScalars.subsets;
                             af::array oneInput;
                             oneInput = af::constant(1.f, lengthFull[indD] * nBins);
-                            status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, oneInput, subIter, timestep, length, lengthFull[indD], 
+                            status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, MethodList, oneInput, subIter, timestep, length, lengthFull[indD], 
                                 meanBP, g, proj, false, ii, pituus);
                             if (status != 0) {
                                 return -1;
@@ -787,7 +801,7 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
                             mexEval();
                         }
                         af::array oneInput = af::constant(0.f, 1, 1);
-                        status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, oneInput, 0, timestep, length, m_size, meanBP, g, 
+                        status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, MethodList, oneInput, 0, timestep, length, m_size, meanBP, g, 
                             proj, true, ii, pituus);
                         if (status != 0) {
                             return -1;
@@ -818,7 +832,7 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
                             if (inputScalars.projector_type == 6)
                                 backprojectionType6(oneInput, w_vec, vec, inputScalars, length[indD], uu, proj, 0, subIter, 0, 0, 0, ii, atten);
                             else {
-                                status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, oneInput, subIter, timestep, length, 
+                                status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, MethodList, oneInput, subIter, timestep, length, 
                                     lengthFull[indD], meanBP, g, proj, false, ii, pituus);
                                 if (status != 0) {
                                     return -1;
@@ -960,7 +974,7 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
 				if (inputScalars.projector_type == 6)
 					backprojectionType6(oneInput1, w_vec, vec, inputScalars, length[indD], uu, proj, timestep, ll, 0, 0, 0, 0, atten);
 				else {
-					status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, oneInput1, ll, timestep, length, lengthFull[indD], meanBP, 
+					status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, MethodList, oneInput1, ll, timestep, length, lengthFull[indD], meanBP, 
                         g, proj, false, 0, pituus);
 					if (status != 0) {
 						return -1;
@@ -980,6 +994,19 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
 			}
 		}
     }
+#ifndef CPU
+	if (inputScalars.fastPDHG) {
+		af::sync();
+		for (uint32_t timestep = 0; timestep < inputScalars.Nt; timestep++)
+			for (int ii = 0; ii <= inputScalars.nMultiVolumes; ii++) {
+				// Clear the backprojection output memory such that it no longer takes space when using fastPDHG
+				vec.rhs_os[timestep][ii] = af::constant(0.f, 1);
+			}
+		af::deviceGC();
+		if (DEBUG)
+			mexPrint("rhs_os released (fastPDHG)");
+	}
+#endif
 
     // Initial values
     if (!inputScalars.largeDim && !MethodList.FDK) {
@@ -1019,7 +1046,7 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
 				if (status != 0)
 					return -1;
 				computeIntegralImage(inputScalars, w_vec, length[0], mData[0][timestep], meanBP);
-				status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, mData[0][timestep], 0, timestep, length, fullMSize, meanBP, g, 
+				status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, MethodList, mData[0][timestep], 0, timestep, length, fullMSize, meanBP, g, 
                     proj, false, 0, pituus);
 				if (status != 0)
 					return -1;
@@ -1054,7 +1081,7 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
 						largeDimFirst(inputScalars, proj, ii);
 						if (FDK)
 							vec.rhs_os[timestep][0] = af::array(inputScalars.lDimStruct.imDim[ii], &apuF[inputScalars.lDimStruct.cumDim[ii]], afHost);
-						status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, mData[0][timestep], kk, timestep, length, fullMSize, 
+						status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, MethodList, mData[0][timestep], kk, timestep, length, fullMSize, 
                             meanBP, g, proj, false, 0, pituus, FDK);
 						if (status != 0) {
 							return -1;
@@ -1267,13 +1294,19 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
 								computeIntegralImage(inputScalars, w_vec, length[indD], OSEMapu, meanBP);
 							}
 						}
+						// Setup the fastPDHG to account for also everything after backprojection itself
+#ifndef CPU
+						if (inputScalars.fastPDHG) {
+							setFastPDHGSubIterParams(proj, inputScalars, w_vec, MethodList, tt, iter, osa_iter);
+						}
+#endif
 						for (int ii = 0; ii <= inputScalars.nMultiVolumes; ii++) {
 							if (ii == 0 && inputScalars.adaptiveType == 2 && MethodList.CPType)
 								vec.adapTypeA = outputFP.copy();
 
 							if (CTOSEMBranch) {
 								if (inputScalars.randoms_correction || iter == 0 || (compute_norm_matrix == 1u && proj.no_norm == 0)) {
-									status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, OSEMapu, osa_iter,tt,  length, m_size, meanBP, g, proj, false, ii, pituus);
+									status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, MethodList, OSEMapu, osa_iter,tt,  length, m_size, meanBP, g, proj, false, ii, pituus);
 									if (compute_norm_matrix == 1u) {
 										vec.Summ[0][ii][0] = vec.rhs_os[tt][ii];
 										vec.Summ[0][ii][0](vec.Summ[0][ii][0] < inputScalars.epps) = inputScalars.epps;
@@ -1290,7 +1323,7 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
 								transferSensitivityImage(vec.Summ[0][ii][0], proj, static_cast<size_t>(ii));
 							else if (compute_norm_matrix == 2u)
 								transferSensitivityImage(vec.Summ[0][ii][osa_iter], proj, static_cast<size_t>(ii));
-							status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, outputFP, osa_iter, tt, length, m_size, meanBP, g, proj, false, ii, pituus, false,
+							status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, MethodList, outputFP, osa_iter, tt, length, m_size, meanBP, g, proj, false, ii, pituus, false,
 								concurrentBP ? ii + 1 : 0, !concurrentBP, ii == 0 || CTOSEMBranch);
 							if (status != 0) {
 								if (compute_norm_matrix == 1u) {
@@ -1305,13 +1338,18 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
 								transferControl(vec, inputScalars, g, w_vec, tt, compute_norm_matrix, proj.no_norm, osa_iter, ii);
 						}
 #ifndef CPU
+						if (inputScalars.fastPDHG) {
+							proj.fastStep = 0;
+						}
+#endif
+#ifndef CPU
 						if (concurrentBP) {
 							// Make sure that the concurrent queues/streams are complete before moving on
 							status = proj.joinSideQueues();
 							if (status != 0)
 								return -1;
 							for (int ii = 0; ii <= inputScalars.nMultiVolumes; ii++) {
-								finalizeBackwardProjectionAF(vec, inputScalars, w_vec, outputFP, meanBP, g, proj, tt, ii);
+								finalizeBackwardProjectionAF(vec, inputScalars, w_vec, MethodList, outputFP, meanBP, g, proj, tt, ii);
 								transferControl(vec, inputScalars, g, w_vec, tt, compute_norm_matrix, proj.no_norm, osa_iter, ii);
 							}
 						}
@@ -1405,6 +1443,12 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
                         apuPr = new float[inputScalars.lDimStruct.imDim[0]];
                         std::copy(apuF, apuF + inputScalars.lDimStruct.imDim[0], apuPr);
                     }
+                    // Only set the fastPDHG components once as they stay constant for each subvolume
+#ifndef CPU
+                    if (inputScalars.fastPDHG) {
+                        setFastPDHGSubIterParams(proj, inputScalars, w_vec, MethodList, tt, iter, osa_iter);
+                    }
+#endif
                     for (int ii = 0; ii < inputScalars.subsetsUsed; ii++) {
                         largeDimFirst(inputScalars, proj, ii);
                         if (iter == 0 && osa_iter == 0) {
@@ -1424,7 +1468,16 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
                         if (w_vec.computeD)
                             w_vec.D[0][0] = af::array(inputScalars.lDimStruct.imDim[ii], &apuD[inputScalars.lDimStruct.cumDim[ii]], afHost);
                         af::sync();
-                        status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, outputFP, osa_iter, tt, length, m_size, meanBP, g, proj, false, 0, pituus);
+                        status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, MethodList, outputFP, osa_iter, tt, length, m_size, meanBP, g, proj, false, 0, pituus, false, 0, true, true, ii);
+                        // Normally this trimming is done in computeOSEstimates, but fastPDHG skips that function completely
+                        if (inputScalars.fastPDHG && vec.im_os[tt][0].elements() > inputScalars.lDimStruct.imDim[ii]) {
+                            if (ii == 0)
+                                vec.im_os[tt][0] = vec.im_os[tt][0](af::seq(0, inputScalars.lDimStruct.imDim[ii] - 1));
+                            else if (ii < inputScalars.subsetsUsed - 1)
+                                vec.im_os[tt][0] = vec.im_os[tt][0](af::seq(inputScalars.lDimStruct.startPr[ii], inputScalars.lDimStruct.imDim[ii] - 1 + inputScalars.lDimStruct.endPr[ii]));
+                            else
+                                vec.im_os[tt][0] = vec.im_os[tt][0](af::seq(inputScalars.lDimStruct.startPr[ii], af::end));
+                        }
                         status = computeOSEstimates(vec, w_vec, MethodList, iter, osa_iter, inputScalars, length, break_iter,
                             pituus, g, proj, mData[0], m_size, uu, compute_norm_matrix, 0, inputScalars.largeDim, ii);
                         if (status != 0)
@@ -1449,6 +1502,11 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
                             mexEval();
                         }
                     }
+#ifndef CPU
+                    if (inputScalars.fastPDHG) {
+                        proj.fastStep = 0;
+                    }
+#endif
                     if (MethodList.NLM || MethodList.RDP || MethodList.hyperbolic || MethodList.GGMRF || MethodList.TV) {
                         delete apuPr;
                     }
@@ -1458,7 +1516,7 @@ int reconstructionAF(const float* z_det, const float* x, const F* Sin, const R* 
                         for (int ii = 1; ii <= inputScalars.nMultiVolumes; ii++) {
                             if (iter == 0 && osa_iter == 0 && (MethodList.PDHG || MethodList.PDHGKL || MethodList.PDHGL1 || MethodList.CV || MethodList.PDDY))
                                 vec.uCP[tt].emplace_back(vec.im_os[tt][ii].copy());
-                            status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, outputFP, osa_iter, tt, length, m_size, meanBP, g, proj, false, ii, pituus);
+                            status = backwardProjectionAFOpenCL(vec, inputScalars, w_vec, MethodList, outputFP, osa_iter, tt, length, m_size, meanBP, g, proj, false, ii, pituus);
                             if (status != 0)
                                 return -1;
                             if (DEBUG) {
