@@ -1966,7 +1966,6 @@ class projectorClass:
         return self
         
     class parameters(ctypes.Structure):
-        _pack_  = 1
         _fields_ = [
             ('use_raw_data', ctypes.c_uint8),
             ('listmode', ctypes.c_uint8),
