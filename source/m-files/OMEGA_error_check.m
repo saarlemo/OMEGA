@@ -239,7 +239,7 @@ if options.projector_type > 6 && ~ismember(options.projector_type, ...
         [11 12 13 14 15 21 22 23 24 25 31 32 33 34 35 41 42 43 44 45 51 54 55])
     error('The selected projector type is not supported!')
 end
-if options.use_CPU && options.projector_type ~= 1 && options.implementation == 2
+if options.use_CPU && ~ismember(options.projector_type, [11 1]) && options.implementation == 2
     error('Selected projector type is not supported with CPU implementation!')
 end
 if sum(options.precondTypeImage) == 0 && (options.PKMA || options.MRAMLA || options.MBSREM)
@@ -424,11 +424,24 @@ if options.largeDim
     if ~options.PDHG && ~options.FDK && ~options.PKMA && ~options.PDDY && ~options.PDHGL1 && ~options.PDHGKL
         error('Large dimension support is only available for PDHG, PKMA, and FDK!')
     end
-    if options.MRP || options.quad || options.Huber || options.weighted_mean || options.FMH || options.ProxTV || options.TGV || options.L || options.AD
+    if options.MRP || options.quad || options.Huber || options.weighted_mean || options.FMH || options.ProxTV || options.TGV || options.L || options.AD || options.APLS
         error('Large dimension support is only available for non-local methods, RDP, GGMRF, hyperbolic prior and TV!')
     end
     if ismember(options.projector_type,[15 51 45 5 54 2 3])
         error('Large dimension support currently supports only projector types 14 and 4!')
+    end
+    % Anatomical weighting is not supported by largeDim
+    if options.RDP && options.RDP_use_anatomical
+        error('Anatomical weighting for RDP (RDP_use_anatomical) is not supported with largeDim!')
+    end
+    if options.TV && options.TV_use_anatomical
+        error('Anatomical weighting for TV (TV_use_anatomical) is not supported with largeDim!')
+    end
+    if options.NLM && options.NLM_use_anatomical
+        error('Anatomical weighting for NLM (NLM_use_anatomical) is not supported with largeDim!')
+    end
+    if isfield(options, 'maskBP') && size(options.maskBP, 3) > 1
+        error('A 3D backprojection/prior mask is not supported with largeDim! Use a 2D (transaxial) mask instead.')
     end
 end
 if options.use_CUDA && options.use_CPU && options.implementation == 2

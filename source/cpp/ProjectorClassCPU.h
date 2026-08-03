@@ -36,6 +36,9 @@ public:
 	float* d_output, * d_W, * d_gaussianNLM, * d_inputB, * d_refIm, * weights;
 	size_t memSize = 0ULL;
 	int32_t Ndx, Ndy, Ndz;
+	// Prior mask / extended FOV slice indices, mirroring the mask buffers the GPU projector class holds
+	const uint8_t* d_maskPrior = nullptr, * d_eFOVIndices = nullptr;
+	uint32_t maskPriorZ = 1U;
 	std::chrono::steady_clock::time_point tStartLocal, tStartGlobal, tStartAll;
 	std::chrono::steady_clock::time_point tEndLocal, tEndGlobal, tEndAll;
 
@@ -88,6 +91,12 @@ public:
 			param.maskFP = w_vec.maskFP;
 		if (param.useMaskBP)
 			param.maskBP = w_vec.maskBP;
+		if (inputScalars.maskBP || (inputScalars.useExtendedFOV && !inputScalars.multiResolution)) {
+			d_maskPrior = w_vec.maskPrior;
+			maskPriorZ = inputScalars.maskBPZ;
+		}
+		if (inputScalars.eFOV && !inputScalars.multiResolution)
+			d_eFOVIndices = w_vec.eFOVIndices;
 		// SPECT EDIT
 		param.rayShiftsDetector = w_vec.rayShiftsDetector;
 		param.rayShiftsSource = w_vec.rayShiftsSource;
@@ -164,7 +173,8 @@ public:
 		if (param.listMode > 0)
 			d_x = &w_vec.listCoord[pituus[osa_iter] * 6];
 		param.currentSubset = osa_iter;
-		param.nMeas = length[osa_iter];
+		// Offset (in projections/sinograms) to the first measurement of the current subset, required by subset types >= 8
+		param.nMeas = pituus[osa_iter];
 		param.computeSensIm = false;
 		param.projType = inputScalars.FPType;
 
@@ -228,7 +238,8 @@ public:
 		}
 		param.projType = inputScalars.BPType;
 		param.currentSubset = osa_iter;
-		param.nMeas = length[osa_iter];
+		// Offset (in projections/sinograms) to the first measurement of the current subset, required by subset types >= 8
+		param.nMeas = pituus[osa_iter];
 
 		projectorType123Implementation4<float>(param, nMeas, vec_opencl.d_rhs_os[ii], d_x, d_z, d_output, inputScalars.CT, inputScalars.SPECT, 2, d_Summ[uu], detIndices);
 		return 0;
@@ -237,7 +248,8 @@ public:
 	inline int computeMRP(const scalarStruct& inputScalars, const int32_t Ndx, const int32_t Ndy, const int32_t Ndz) {
 		if (inputScalars.verbose >= 3)
 			mexPrint("Starting OpenMP median root prior computation");
-		medianFilter3D(d_inputB, d_W, inputScalars.Nx[0], inputScalars.Ny[0], inputScalars.Nz[0], inputScalars.NxOrig, inputScalars.NyOrig, inputScalars.NzOrig, Ndx, Ndy, Ndz);
+		medianFilter3D(d_inputB, d_W, inputScalars.Nx[0], inputScalars.Ny[0], inputScalars.Nz[0], inputScalars.NxOrig, inputScalars.NyOrig, inputScalars.NzOrig, Ndx, Ndy, Ndz,
+			d_maskPrior, d_eFOVIndices, maskPriorZ);
 		if (inputScalars.verbose >= 3)
 			mexPrint("OpenMP median root prior computed");
 		return 0;

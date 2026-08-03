@@ -13,11 +13,32 @@ Metal bug fixes:
 
 ### New features
 - Added HIP support, and widened Metal support
-  - 
+  - HIP support includes both implementation 2 and CuPy/PyTorch support
+  - Implementation 2 requires ArrayFire to be built for HIP, for which you need at the moment this PR: https://github.com/arrayfire/arrayfire/pull/3708
+  - CuPy and PyTorch support in custom reconstruction only projector types 1, 2, 3, and 4, and for 4 only the backprojection, i.e. 14
 	
-- Combined OpenCL, CUDA, and HIP code into one
+- Combined OpenCL, CUDA, Metal, and HIP code into one
   - Functionality between the three should now be identical
   - Doesn't require anything from the user
+  
+- Optimized the code in general
+  - Projector type 5 and the hybrid x5 should see 10-20% improvement in speeds
+  - Otherwise the improvement should be 5-10%
+  - Biggest effect for (CB)CT, less so for emission tomography
+  
+- Reduced memory usage of implementation 2
+  - PDHG (and its variants L1 and KL), PKMA, MBSREM, and BSREM now use less memory as the backprojection is never saved to global memory
+  - The above is automatic and doesn't work with all possible combinations, such as when using anatomical references images with priors
+  - All other methods should also see a reduction of one volume in memory usage
+  
+- Added support for custom sensitivity image coordinates
+  - You can now add both transaxial (`options.xSens`) and axial (`options.zSens`) coordinates specifically for sensitivity image computation
+  - All possible combinations are computed
+  - xSens should thus be 2xM, where M is the total number of (valid) detectors, and zSens 1xM
+  
+- Custom reconstructions in Python no longer require addProjector or initProj
+  - You can now ignore both and go straight to calling the operators
+  - It's still recommended to at least initialize the projector with initProj
   
 ### Bug fixes and enhancements
 
@@ -25,9 +46,97 @@ Metal bug fixes:
 
 - The workgroup/block size can now be specified by the user with `options.local_size`. The values can, and should be, defined for all three dimensions
 
-- Regularization can now be applied at every Nth iteration with `options.regEveryIter`. For example `options.regEveryIter = 2` computes regularization every second iteration (the first and last are always regularized)
+- Regularization can now be applied at every Nth iteration with `options.regEveryIter`. For example `options.regEveryIter = 2` computes regularization every second iteration (the first and last iterations are always regularized)
 
 - GGMRF now works with masking
+
+- GGMRF works correctly when using largeDim
+
+- RDP works correctly in OpenCL when using largeDim
+
+- Projector type 4 is now closer to a "normal" case when using largeDim
+
+- Dynamic listmode (coordinate-based) should now work
+
+- Offset correction can now be used with subset type 0
+
+- Masks should work more reliably across different setups
+
+- Fix for offset correction when using non-square detector pixels
+
+- Correct NLM for CPU, previously the results weren't correctly saved (implementation 2 CPU)
+
+- Add support for hyperbolic prior for CPU (implementation 2 CPU)
+
+- GGMRF previously could have used wrong weight values in very rare cases (implementation 2 CPU)
+
+- NL type 6 (NLGGMRF) now works on the CPU side as well (implementation 2 CPU)
+
+- Small loop fix to the CPU projector type 1 when computing perpendicular rays, one index was previously omitted (implementations 1, 2 CPU, and 4)
+
+- Commented unused code in CPU RDP (implementation 2 CPU)
+
+- Arc correction in MATLAB should now work for dynamic cases
+
+- MBSREM, MRAMLA and SPS now work in MATLAB when using randoms correction (implementations 1 and 4)
+
+- Gradient computation for the gradient-based preconditioner was previously wrong in MATLAB (implementations 1 and 4)
+
+- DRAMA should now work in MATLAB (implementations 1 and 4)
+
+- Image-based filtering preconditioner should now work in MATLAB (implementations 1 and 4)
+
+- FISTA with L1 regularization now works in MATLAB  (implementations 1 and 4)
+
+- BSREM and ROSEM MAP should correctly regularize now in MATLAB  (implementations 1 and 4)
+
+- Median filter should properly work when using rectangular (non-square) neighborhoods  (implementations 1 and 4)
+
+- Cell measurement inputs should work more reliably (MATLAB)
+
+- Power method should work now if the input image is a cell, and use the input number of iterations and filtering if selected (implementations 1 and 4)
+
+- Weight error now works correctly if the weights vector is too long (MATLAB)
+
+- TV prior should now work with reference image (implementations 1 and 4)
+
+- Fix small indexing bug in arc correction in Python
+
+- TOF indices are now correctly imported when loading ROOT files (GATE 9 and earlier)
+
+- Fixed compilation when platform included several different devices
+
+- Correctly release memory with CUDA when using index-based reconstruction
+
+- Fix RDP with corners when using largeDim, previously one slice was always missing
+
+- Fix TOF indices when computing sensitivity image, previously there was a risk for out of bounds case
+
+- ArrayFire is no longer mandatory with the custom reconstruction in Python
+
+- Fixed PSF padding. Now the padding is properly reflected in the boundary
+
+- Fix parallel beam reconstruction when using CUDA
+
+- Inveon SCN-files can be loaded again
+
+- Multi-ray TOF should now work, though in general it's not recommended
+
+- TGV works when using masks and not using images i.e. useImages = false
+
+- OpenCL CPUs now default to useImages = false
+
+- Implementation 2 with CPU no longer gives errors in MATLAB with projector type 11
+
+- Any algorithm that didn't use sensitivity image now works when useImages = false
+
+- Fixed forward projection masks when useImages = false
+
+- Fixed MRP (implementation 2 CPU)
+
+- PET attenuation now works when useImages = false
+
+- PSF padding now uses af::pad and requires AF 3.8 or newer, so OMEGA now requires AF 3.8 minimum
 
 ## OMEGA v2.2.0
 

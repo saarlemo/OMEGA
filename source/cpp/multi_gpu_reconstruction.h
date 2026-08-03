@@ -45,7 +45,7 @@ inline void reconstruction_multigpu(const float* z_det, const float* x, scalarSt
 		length[kk] = pituus[kk + 1u] - pituus[kk];
 	uint64_t m_size = length[inputScalars.osa_iter0];
 	if (DEBUG) mexPrint("Adding projector");
-	Status status = SUCCESS_VALUE;
+	STATUS_t status = SUCCESS_VALUE;
 
 	ProjectorClass proj;
 	status = proj.addProjector(inputScalars, w_vec, MethodList, header_directory, type);
@@ -379,10 +379,10 @@ inline void reconstruction_multigpu(const float* z_det, const float* x, scalarSt
                             uu += osa_iter * (inputScalars.nMultiVolumes + 1);
                             status = proj.fillDeviceBuffer(proj.vec_opencl.d_rhs_os[ii], (C)0, sizeof(C) * inputScalars.im_dim[ii]);
                             CHECK(status, "\n", );
-                            status = proj.backwardProjection(inputScalars, w_vec, osa_iter, timestep, length, m_size, false, ii, ii, uu);
+                            status = proj.backwardProjection(inputScalars, w_vec, osa_iter, timestep, length, m_size, MethodList, false, ii, ii, uu);
 
                         } else {
-                            status = proj.backwardProjection(inputScalars, w_vec, osa_iter, timestep, length, m_size, false, ii, uu);
+                            status = proj.backwardProjection(inputScalars, w_vec, osa_iter, timestep, length, m_size, MethodList, false, ii, uu);
                         }
                         CHECK(status, "\n", );
     #ifndef METAL // Metal has no support for implementation 3

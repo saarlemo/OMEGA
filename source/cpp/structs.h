@@ -6,6 +6,9 @@
 #define FINVERSE true
 // If false, uses the original EM preconditioner. If true, uses an EM preconditioner with the measurement data instead of ones.
 #define SENSSCALE false
+// If true, caches the NLM neighborhood in local memory
+// Recommended to be true
+#define FASTNLMLOCALCACHE true
 // If true, outputs all the multi-resolution volumes (and the reconstruction itself) as different cell elements
 #define CELL false
 #include <algorithm>

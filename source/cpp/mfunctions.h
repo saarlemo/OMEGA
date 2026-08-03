@@ -156,6 +156,9 @@ inline void loadInput(scalarStruct& inputScalars, const mxArray* options, const 
 	inputScalars.adaptiveType = getScalarUInt32(options, 0, "PDAdaptiveType");
 	inputScalars.storeFP = getScalarBool(options, 0, "storeFP");
 	inputScalars.useTotLength = getScalarBool(options, 0, "useTotLength");
+    // largeDim isn't particularly recommended for PET, but this makes sure that the ray is correctly normalized
+	if (inputScalars.largeDim)
+		inputScalars.useTotLength = true;
 	// Optional user-defined local/work-group (block) size (int32 vector of up to 3 elements). Any value
 	// left negative (or the field omitted) falls back to the built-in defaults in addProjector.
 	if (mxGetFieldNumber(options, "local_size") >= 0) {
@@ -170,6 +173,10 @@ inline void loadInput(scalarStruct& inputScalars, const mxArray* options, const 
 	// Optional: compute the spatial prior only every regEveryIter-th (sub)iteration (1 = every time).
 	if (mxGetFieldNumber(options, "regEveryIter") >= 0)
 		inputScalars.regEveryIter = getScalarInt32(options, 0, "regEveryIter");
+	// Optimize PDHG/PKMA/MBSREM/BSREM in specific cases
+	// Only specific configurations are supported, see checkFastPDHG in functions.hpp
+	if (mxGetFieldNumber(options, "fastPDHG") >= 0)
+		inputScalars.fastPDHG = getScalarBool(options, 0, "fastPDHG");
 	const uint32_t* devPointer = getUint32s(options, "use_device");
 	size_t devLength = mxGetNumberOfElements(mxGetField(options, 0, "use_device"));
 	inputScalars.usedDevices = std::vector<uint32_t>(devPointer, devPointer + devLength);
@@ -441,8 +448,8 @@ inline void form_data_variables(Weighting& w_vec, const mxArray* options, scalar
 		}
 	}
 	// General variables for neighborhood-based methods
-	if ((MethodList.L || MethodList.FMH || MethodList.WeightedMean || MethodList.Quad || MethodList.Huber || MethodList.MRP || MethodList.NLM || MethodList.ProxNLM || MethodList.hyperbolic || MethodList.RDP) 
-		&& MethodList.MAP) {
+	if ((MethodList.L || MethodList.FMH || MethodList.WeightedMean || MethodList.Quad || MethodList.Huber || MethodList.MRP || MethodList.NLM || MethodList.ProxNLM || MethodList.hyperbolic || MethodList.RDP
+		|| MethodList.GGMRF) && MethodList.MAP) {
 		// Neighborhood size
 		w_vec.Ndx = getScalarUInt32(getField(options, 0, "Ndx"), -24);
 		w_vec.Ndy = getScalarUInt32(getField(options, 0, "Ndy"), -25);

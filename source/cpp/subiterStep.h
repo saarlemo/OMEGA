@@ -4,6 +4,9 @@
 #include "priors.h"
 
 inline int computeOSEstimates(AF_im_vectors& vec, Weighting& w_vec, const RecMethods& MethodList, const uint32_t iter, uint32_t osa_iter, scalarStruct& inputScalars, std::vector<int64_t>& length, bool& break_iter, const int64_t* pituus, const af::array& g, ProjectorClass& proj, const std::vector<af::array> &mData, uint64_t m_size, const int64_t subSum, const uint8_t compute_norm_matrix, const int kk = 0, const bool largeDim = false, const int vv = 0) {
+    // Ignore this function if using fastPDHG
+    if (inputScalars.fastPDHG)
+        return 0;
     int status = 0;
     af::array OSEMApu, COSEMApu, PDDYApu;
     std::vector<af::array> FISTAApu;
