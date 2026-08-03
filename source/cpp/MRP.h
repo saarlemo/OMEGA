@@ -3,7 +3,8 @@
 
 template <typename T>
 void medianFilter3D(const T* grad, T* output, const int Nx, const int Ny, const int Nz, const int NxOrig, const int NyOrig, const int NzOrig, const int32_t search_window_x,
-	const int32_t search_window_y, const int32_t search_window_z, const uint8_t* maskBP = nullptr, const uint8_t* fovIndices = nullptr) {
+	const int32_t search_window_y, const int32_t search_window_z, const uint8_t* maskBP = nullptr, const uint8_t* fovIndices = nullptr,
+	const uint32_t maskBPZ = 1U) {
 
 	setThreads();
 	int64_t start = 0;
@@ -20,14 +21,25 @@ void medianFilter3D(const T* grad, T* output, const int Nx, const int Ny, const 
 		int64_t z = n / Nxy;
 		int64_t y = (n - z * Nxy) / static_cast<int64_t>(Nx);
 		int64_t x = n - z * Nxy - y * static_cast<int64_t>(Nx);
+		const int64_t xOrig = x, yOrig = y, zOrig = z;
 		x += search_window_x;
 		y += search_window_y;
 		z += search_window_z;
-		//if (fovIndices[xyz.z] == 0)
-		//	return;
-		//const int maskVal = read_imageui(maskBP, sampler_MASK, (int2)(xyz.x, xyz.y)).w;
-		//if (maskVal == 0)
-		//	return;
+		// Same mask/extended FOV handling as the GPU kernel
+		// Masking is still work in progress on the CPU backend side
+		const int64_t nCenter = x + y * static_cast<int64_t>(Nx + search_window_x * 2) + z * static_cast<int64_t>(Nx + search_window_x * 2) * static_cast<int64_t>(Ny + search_window_y * 2);
+		if (fovIndices != nullptr && fovIndices[zOrig] == 0) {
+			output[n] = grad[nCenter];
+			continue;
+		}
+		if (maskBP != nullptr) {
+			const int64_t maskInd = maskBPZ > 1U ? xOrig + yOrig * static_cast<int64_t>(Nx) + zOrig * static_cast<int64_t>(Nx) * static_cast<int64_t>(Ny)
+				: xOrig + yOrig * static_cast<int64_t>(Nx);
+			if (maskBP[maskInd] == 0) {
+				output[n] = grad[nCenter];
+				continue;
+			}
+		}
 		int koko = (search_window_x * 2 + 1) * (search_window_y * 2 + 1) * (search_window_z * 2 + 1);
 		std::vector<T> median(koko);
 		std::vector<T> medianF(koko);

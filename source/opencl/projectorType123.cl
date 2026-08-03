@@ -732,7 +732,9 @@ void projectorType123(
 			d_d2 = d_d.x;
 			d_N0 = d_Nxyz.y;
 			d_N1 = d_Nxyz.x;
-			d_N2 = d_Nxyz.y;
+			// x and y are swapped here, d_N2/d_N3 are the strides of the perpendicular (y) and
+			// the marching (x) coordinate, i.e. the y stride is Nx (cf. the ORTH case below)
+			d_N2 = d_Nxyz.x;
 			d_N3 = 1u;
 #if defined(ORTH) //////////////// ORTHOGONAL OR VOLUME-BASED RAY TRACER ////////////////
 			b1 = b.x;

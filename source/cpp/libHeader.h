@@ -881,6 +881,9 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
     inputScalars.adaptiveType = options.PDAdaptiveType;
     inputScalars.storeFP = options.storeFP;
     inputScalars.useTotLength = options.useTotLength;
+    // largeDim isn't particularly recommended for PET, but this makes sure that the ray is correctly normalized
+    if (inputScalars.largeDim)
+        inputScalars.useTotLength = true;
     if (inputScalars.CT) {
         inputScalars.nColsD = options.nColsD;
         inputScalars.nRowsD = options.nRowsD;
@@ -1129,8 +1132,8 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
         }
     }
     // General variables for neighborhood-based methods
-    if ((MethodList.L || MethodList.FMH || MethodList.WeightedMean || MethodList.Quad || MethodList.Huber || MethodList.MRP || MethodList.NLM || MethodList.ProxNLM || MethodList.hyperbolic || MethodList.RDP)
-        && MethodList.MAP) {
+    if ((MethodList.L || MethodList.FMH || MethodList.WeightedMean || MethodList.Quad || MethodList.Huber || MethodList.MRP || MethodList.NLM || MethodList.ProxNLM || MethodList.hyperbolic || MethodList.RDP
+        || MethodList.GGMRF) && MethodList.MAP) {
         // Neighborhood size
         w_vec.Ndx = options.Ndx;
         w_vec.Ndy = options.Ndy;

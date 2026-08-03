@@ -729,7 +729,7 @@ classdef projectorClass
                     end
                     if ~obj.param.useIndexBasedReconstruction
                         if iscell(obj.param.x)
-                            for uu = 1 : options.Nt
+                            for uu = 1 : obj.param.Nt
                                 if size(obj.param.x{uu},2) == 2
                                     obj.param.x{uu} = [obj.param.x{uu}(:,1)'; obj.param.y{uu}(:,1)'; obj.param.z{uu}(:,1)';obj.param.x{uu}(:,2)'; obj.param.y{uu}(:,2)'; obj.param.z{uu}(:,2)'];
                                 elseif size(obj.param.x{uu},1) == 2
@@ -1005,7 +1005,7 @@ classdef projectorClass
                 obj.param.det_per_ring = obj.param.det_per_ring * obj.param.sampling_raw;
             end
 
-            if obj.param.offsetCorrection && obj.param.subsets > 1
+            if obj.param.offsetCorrection && obj.param.subsets > 1 && obj.param.subset_type > 0
                 obj.param.OffsetLimit = obj.param.OffsetLimit(obj.index);
             end
             if obj.param.SPECT

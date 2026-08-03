@@ -429,11 +429,92 @@ extern "C" __global__
                            IMAGE2D maskBP,
 #endif
 #endif
-                           const LONG d_nProjections, const int ii) {
+                           const LONG d_nProjections, const int ii
+#ifdef FASTPDHG // START FASTPDHG
+#if FASTALG == 0
+    , CLGLOBAL float* CLRESTRICT d_U
+#endif
+#if FASTPRECOND > 0
+    , const CLGLOBAL float* CLRESTRICT d_precond
+#endif
+#ifdef FASTNLM
+    , IMAGE3D d_imNLM
+    , CONSTANT float* d_gaussian
+#ifdef NLMREF
+    , IMAGE3D d_urefNLM
+#endif
+    // The NLM parameters are always passed as a fixed block (h, gamma, p, q, c, adaptive constant) so that the host
+    // side does not have to mirror the NLTYPE conditionals
+    , const float fastNLMh, const float fastNLMgamma, const float fastNLMp, const float fastNLMq, const float fastNLMc, const float fastNLMs
+#endif
+#ifdef FASTRDP
+    , IMAGE3D d_imNLM
+#ifdef FASTRDPCORNERS
+    , CONSTANT float* d_swWeight
+#endif
+    , const float fastRDPgamma
+#ifdef PRIORREF
+    , IMAGE3D d_urefNLM
+#endif
+#endif // FASTRDP
+#ifdef FASTGGMRF
+    , IMAGE3D d_imNLM
+    , CONSTANT float* d_swWeight
+    , const float fastGGMRFp, const float fastGGMRFq, const float fastGGMRFc, const float fastGGMRFpqc
+#endif // FASTGGMRF
+#ifdef FASTHYPER
+    , IMAGE3D d_imNLM
+    , CONSTANT float* d_swWeight
+    , const float fastHYPERsigma
+#endif // FASTHYPER
+#ifdef FASTTV
+    , IMAGE3D d_imNLM
+    , const float fastTVsigma
+#endif // FASTTV
+#if FASTALG == 0
+    , const float fastTheta
+    , const float fastTau
+#else
+    , const float fastLambda
+    , const float fastAlpha
+#endif
+    , const float fastBeta
+    , const float fastEpps
+    , const uchar fastPositivity
+    // largeDim offsets
+    , const LONG fastImOffset
+    , const int fastPriorZOffset
+    , const uchar fastStep
+#endif // END FASTPDHG
+) {
   const int3 i = MINT3(GID0, GID1, GID2 * NVOXELS5);
 #ifdef PYTHON
   const uint3 d_N = make_uint3(d_Nx, d_Ny, d_Nz);
 #endif
+#if defined(FASTPDHG) && defined(FASTNLM) && defined(FASTNLMLOCAL) // START FASTNLMLOCAL
+    LOCAL float lCacheF[NLM_TILEX * NLM_TILEY * NLM_TILEZ];
+#ifdef NLMREF
+    LOCAL float lCacheRefF[NLM_TILEX * NLM_TILEY * NLM_TILEZ];
+#endif
+    if (fastStep != 0u && fastBeta != FLOAT_ZERO && ii == 0)
+        fastFillNLMCache(lCacheF,
+#ifdef NLMREF
+            lCacheRefF,
+#endif
+            d_imNLM,
+#ifdef NLMREF
+            d_urefNLM,
+#endif
+            CINT(i.z), fastPriorZOffset
+        );
+    BARRIER
+#endif // END FASTNLMLOCAL
+#if defined(FASTPDHG) && defined(FASTSWLOCAL) // START FASTSWLOCAL
+    LOCAL float lCacheSW[SW_TILEX * SW_TILEY * SW_TILEZ];
+    if (fastStep != 0u && fastBeta != FLOAT_ZERO && ii == 0)
+        fastFillSWCache(lCacheSW, d_imNLM, CINT(i.z), fastPriorZOffset);
+    BARRIER
+#endif // END FASTSWLOCAL
   if (i.x >= d_N.x || i.y >= d_N.y || i.z >= d_N.z)
     return;
   size_t idx = GID0 + GID1 * d_N.x + GID2 * NVOXELS5 * d_N.y * d_N.x;
@@ -752,6 +833,78 @@ extern "C" __global__
       }
     }
   }
+  // Start fastPDHG computations
+#ifdef FASTPDHG // START FASTPDHG
+    if (fastStep != 0u) {
+        fastPDHGUpdate(temp, wSum, i, idx, d_N, NVOXELS5, no_norm, ii,
+            fastImOffset, fastPriorZOffset,
+#if FASTALG == 0
+            d_U,
+#endif
+            d_forw, d_Summ,
+#if FASTPRECOND > 0
+            d_precond,
+#endif
+#ifdef FASTNLM
+            d_gaussian,
+#ifdef FASTNLMLOCAL
+            lCacheF,
+#ifdef NLMREF
+            lCacheRefF,
+#endif
+#else
+            d_imNLM,
+#ifdef NLMREF
+            d_urefNLM,
+#endif
+#endif
+            fastNLMh,
+#if NLTYPE >= 3
+            fastNLMgamma,
+#endif
+#if NLTYPE == 6
+            fastNLMp, fastNLMq, fastNLMc,
+#endif
+#ifdef NLMADAPTIVE
+            fastNLMs,
+#endif
+#endif // FASTNLM
+#ifdef FASTSWLOCAL
+            lCacheSW,
+#endif
+#ifdef FASTRDP
+            d_imNLM,
+#ifdef FASTRDPCORNERS
+            d_swWeight,
+#endif
+            fastRDPgamma,
+#ifdef PRIORREF
+            d_urefNLM,
+#endif
+#endif // FASTRDP
+#ifdef FASTGGMRF
+            d_imNLM,
+            d_swWeight,
+            fastGGMRFp, fastGGMRFq, fastGGMRFc, fastGGMRFpqc,
+#endif // FASTGGMRF
+#ifdef FASTHYPER
+            d_imNLM,
+            d_swWeight,
+            fastHYPERsigma,
+#endif // FASTHYPER
+#ifdef FASTTV
+            d_imNLM,
+            fastTVsigma,
+#endif // FASTTV
+#if FASTALG == 0
+            fastTheta, fastTau,
+#else
+            fastLambda, fastAlpha,
+#endif
+            fastBeta, fastEpps, fastPositivity);
+        return;
+    }
+#endif // END FASTPDHG
   for (int zz = 0; zz < maxZZ5; zz++) {
     d_forw[idx] = temp[zz];
     if (no_norm == 0u)

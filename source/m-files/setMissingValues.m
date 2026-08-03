@@ -36,6 +36,11 @@ end
 if ~isfield(options, 'storeResidual')
     options.storeResidual = false;
 end
+% By default, use fastPDHG that computes the whole image-domain part in one go
+% Applies only to PDHG (L1 and KL as well), PKMA, MBSREM and BSREM
+if ~isfield(options, 'fastPDHG')
+    options.fastPDHG = true;
+end
 if ~isfield(options, 'sourceToCRot')
     options.sourceToCRot = 1;
 end
