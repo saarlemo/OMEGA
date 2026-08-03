@@ -220,6 +220,7 @@ inline void loadInput(scalarStruct& inputScalars, const mxArray* options, const 
 
 	if (type >= 0) {
 		inputScalars.Nxy = inputScalars.Nx[0] * inputScalars.Ny[0];
+		inputScalars.im_dim.resize(inputScalars.multiResolution ? inputScalars.nMultiVolumes + 1 : 1);
 		inputScalars.im_dim[0] = static_cast<int64_t>(inputScalars.Nxy) * static_cast<int64_t>(inputScalars.Nz[0]);
 		if (inputScalars.multiResolution) {
 			for (int ii = 1; ii <= inputScalars.nMultiVolumes; ii++)
@@ -249,13 +250,18 @@ inline void form_data_variables(Weighting& w_vec, const mxArray* options, scalar
 	if (inputScalars.maskFP) {
 		w_vec.maskFP = getUint8s(options, "maskFP");
 		inputScalars.maskFPZ = getScalarUInt32(getField(options, 0, "maskFPZ"));
+		inputScalars.size_maskFP = mxGetNumberOfElements(getField(options, 0, "maskFP"));
+		if (DEBUG) {
+			mexPrintBase("nMaskFP = %d\n", inputScalars.size_maskFP);
+			mexEval();
+		}
 	}
 	if (inputScalars.maskBP) {
 		w_vec.maskBP = getUint8s(options, "maskBP");
 		inputScalars.maskBPZ = getScalarUInt32(getField(options, 0, "maskBPZ"));
+		inputScalars.size_maskBP = mxGetNumberOfElements(getField(options, 0, "maskBP"));
 		if (DEBUG) {
-			const size_t nMask = mxGetNumberOfElements(getField(options, 0, "maskBP"));
-			mexPrintBase("nMask = %d\n", nMask);
+			mexPrintBase(" size_maskBP = %d\n",  inputScalars.size_maskBP);
 			mexEval();
 		}
 	}
