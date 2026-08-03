@@ -887,6 +887,7 @@ inline int updateInputs(AF_im_vectors& vec, const scalarStruct& inputScalars, Pr
 			proj.vec_opencl.d_im = transferAF(vec.im_os_blurred[ii]);
 		else
 			proj.vec_opencl.d_im = transferAF(vec.im_os[timestep][ii]);
+		proj.vec_opencl.d_image_os.reset(); // The texture wraps the current volume buffer and dimensions.
 #else
 		if (inputScalars.use_psf)
 			proj.vec_opencl.d_im_os = vec.im_os_blurred[ii].device<float>();
@@ -1020,7 +1021,7 @@ inline int backwardProjectionAFOpenCL(AF_im_vectors& vec, scalarStruct& inputSca
 				Nz = inputScalars.lDimStruct.NzPr[lDimChunk];
 			if (proj.transferTex(inputScalars, proj.vec_opencl.d_rhs_os[0], false, Nz) != 0)
 				return -1;
-#else
+#elif defined(OPENCL)
 			const size_t origRegionZ = proj.region[2];
 			if (inputScalars.largeDim && lDimChunk >= 0) {
 				proj.region[2] = inputScalars.lDimStruct.NzPr[lDimChunk];
@@ -1040,11 +1041,15 @@ inline int backwardProjectionAFOpenCL(AF_im_vectors& vec, scalarStruct& inputSca
 	}
 	if (inputScalars.meanBP && inputScalars.BPType == 5)
 		proj.d_meanBP = transferAF(meanBP);
+#if defined(METAL)
+	// With image-mode BP the projected data is copied from d_output into a
+	// Metal texture. Synchronize the preceding ArrayFire update before that
+	// CPU-side texture upload.
+	af::sync();
+#endif
 #if defined(CUDA) || defined(HIP)
 	status = proj.backwardProjection(inputScalars, w_vec, osa_iter, timestep, length, m_size, MethodList, compSens, ii, 0, queueIdx, newInput);
-#elif defined(METAL)
-	status = proj.backwardProjection(inputScalars, w_vec, osa_iter, timestep, length, m_size, MethodList, compSens, ii, ii, ii, queueIdx, newInput);
-#else
+#elif defined(OPENCL) || defined(METAL)
 	status = proj.backwardProjection(inputScalars, w_vec, osa_iter, timestep, length, m_size, MethodList, compSens, ii, 0, -1, queueIdx, newInput);
 #endif
 	// Only unlock after all the queues/streams have finalized
@@ -2097,7 +2102,7 @@ inline void forwardProjectionType6(af::array& fProj, const Weighting& w_vec, AF_
 		//kuvaRot = af::reorder(kuvaRot, 2, 1, 0);
         kuvaRot = af::sum(kuvaRot, 0);
 		kuvaRot = af::reorder(kuvaRot, 1, 2, 0);
-        kuvaRot /= inputScalars.Nx[0];
+		kuvaRot /= inputScalars.Nx[0];
         if (DEBUG || inputScalars.verbose > 2)
             mexPrint("Projector 6 FP step 5 complete");
 
@@ -2122,7 +2127,7 @@ inline af::array backProjectionType6Helper(af::array &fProj, const Weighting& w_
 
         // 1. Smear the input FP across the image volume
         kuvaRot = af::tile(kuvaRot, 1, 1, inputScalars.Nx[ii]); // Repeat through z-axis
-        kuvaRot /= inputScalars.Nx[0];
+		kuvaRot /= inputScalars.Nx[0];
         
         // 2. Attenuation correction
         if (inputScalars.attenuation_correction && (atten != nullptr)) {
@@ -2196,7 +2201,7 @@ inline void backprojectionType6(af::array& fProj, const Weighting& w_vec, AF_im_
 	const uint8_t compute_norm_matrix = 0, const uint32_t iter0 = 0, const int ii = 0, const float* atten = nullptr) {
 	if (DEBUG || inputScalars.verbose >= 3)
 		mexPrint("Starting SPECT backprojection");
-    
+        
     vec.rhs_os[timestep][ii] = backProjectionType6Helper(fProj, w_vec, inputScalars, proj, length, timestep, uu, ii, atten);
 	vec.rhs_os[timestep][ii](vec.rhs_os[timestep][ii] < inputScalars.epps && vec.rhs_os[timestep][ii] >= 0.f) = inputScalars.epps;
     
@@ -2204,7 +2209,7 @@ inline void backprojectionType6(af::array& fProj, const Weighting& w_vec, AF_im_
 		if (DEBUG || inputScalars.verbose >= 3)
 			mexPrint("Computing sensitivity image");
         
-        af::array sensProj = af::constant(1.f, inputScalars.nColsD, inputScalars.nRowsD, length);
+		af::array sensProj = af::constant(1.f, inputScalars.nColsD, inputScalars.nRowsD, length);
 		if (compute_norm_matrix == 2) {
 			vec.Summ[0][ii][osa_iter] = backProjectionType6Helper(sensProj, w_vec, inputScalars, proj, length, timestep, uu, ii, atten);
 			vec.Summ[0][ii][osa_iter](vec.Summ[0][ii][osa_iter] < inputScalars.epps) = 1.f;
