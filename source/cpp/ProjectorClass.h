@@ -28,11 +28,11 @@
 struct EmptyTextureArray {};
 #if defined(CUDA) || defined(HIP)
 using STATUS_t = CUresult;
-using KERHANDLE = CUfunction;
-using PRGHANDLE = CUmodule;
+using KERNELHANDLE_t = CUfunction;
+using PROGRAMHANDLE_t = CUmodule;
 using INT32_t = int;
 using UINT32_t = unsigned int;
-using WorkRange = std::array<UINT32_t, 3>;
+using WORKRANGE_t = std::array<UINT32_t, 3>;
 using INT64_t = int64_t;
 using UINT64_t = uint64_t;
 using FLOAT2_t = float2;
@@ -48,11 +48,11 @@ using TEXARRAY_t = CUarray;
 #define SUCCESS_VALUE CUDA_SUCCESS
 #elif defined(METAL)
 using STATUS_t = int;
-using KERHANDLE = NS::SharedPtr<MTL::ComputePipelineState>;
-using PRGHANDLE = NS::SharedPtr<MTL::Library>;
+using KERNELHANDLE_t = NS::SharedPtr<MTL::ComputePipelineState>;
+using PROGRAMHANDLE_t = NS::SharedPtr<MTL::Library>;
 using INT32_t = int;
 using UINT32_t = unsigned int;
-using WorkRange = std::array<UINT32_t, 3>;
+using WORKRANGE_t = std::array<UINT32_t, 3>;
 using INT64_t = int64_t;
 using UINT64_t = uint64_t;
 using FLOAT2_t = simd::float2;
@@ -68,11 +68,11 @@ using TEXARRAY_t = EmptyTextureArray;
 #define SUCCESS_VALUE 0
 #elif defined(OPENCL)
 using STATUS_t = cl_int;
-using KERHANDLE = cl::Kernel;
-using PRGHANDLE = cl::Program;
+using KERNELHANDLE_t = cl::Kernel;
+using PROGRAMHANDLE_t = cl::Program;
 using INT32_t = cl_int;
 using UINT32_t = cl_uint;
-using WorkRange = cl::NDRange;
+using WORKRANGE_t = cl::NDRange;
 using INT64_t = cl_long;
 using UINT64_t = cl_ulong;
 using FLOAT2_t = cl_float2;
@@ -456,7 +456,7 @@ class ProjectorClass {
 	size_t erotusPriorEFOV[3];
 	size_t erotusSens[3];
 	// Local and global sizes
-	WorkRange local, global, localPrior, globalPrior, globalPriorEFOV;
+	WORKRANGE_t local, global, localPrior, globalPrior, globalPriorEFOV;
 	struct ResourceState {
 		bool useBuffers = true;
 		bool xC = false;
@@ -884,11 +884,11 @@ class ProjectorClass {
 	/// <param name="local_size the local size"></param>
 	/// <returns></returns>
 #if defined(CUDA) || defined(HIP)
-	inline nvrtcResult createProgram(CUmodule & programFP, CUmodule & programBP,
-		CUmodule & programAux,
+	inline nvrtcResult createProgram(PROGRAMHANDLE_t & programFP, PROGRAMHANDLE_t & programBP,
+		PROGRAMHANDLE_t & programAux,
 #elif defined(METAL)
-	inline STATUS_t createProgram(PRGHANDLE & programFP, PRGHANDLE & programBP,
-		PRGHANDLE & programAux, PRGHANDLE & programSens,
+	inline STATUS_t createProgram(PROGRAMHANDLE_t & programFP, PROGRAMHANDLE_t & programBP,
+		PROGRAMHANDLE_t & programAux, PROGRAMHANDLE_t & programSens,
 #elif defined(OPENCL)
 	inline STATUS_t createProgram(cl::Context & CLContext, cl::Device & CLDeviceID, cl::Program & programFP, cl::Program & programBP,
 		cl::Program & programAux, cl::Program & programSens,
@@ -1146,7 +1146,7 @@ class ProjectorClass {
 			mexPrintBase("inputScalars.FPType = %u\n", inputScalars.FPType);
 			mexEval();
 		}
-		auto buildBackendProgram = [&](std::string& content, PRGHANDLE& program, auto& buildOptions) {
+		auto buildBackendProgram = [&](std::string& content, PROGRAMHANDLE_t& program, auto& buildOptions) {
 #if defined(OPENCL)
 			return buildProgram(inputScalars.verbose, content, CLContext, CLDeviceID, program, inputScalars.atomic_64bit, 
 				inputScalars.atomic_32bit, buildOptions);
@@ -1619,7 +1619,7 @@ class ProjectorClass {
 	/// <param name="options preprocessor values for the build"></param>
 	/// <returns></returns>
 #if defined(METAL)
-	inline STATUS_t buildProgram(const int8_t verbose, std::string& content, PRGHANDLE& program, std::vector<std::string>& options) {
+	inline STATUS_t buildProgram(const int8_t verbose, std::string& content, PROGRAMHANDLE_t& program, std::vector<std::string>& options) {
 		if (!mtlDevice) {
 			mexPrint("No Metal device available");
 			return -1;
@@ -1845,15 +1845,12 @@ class ProjectorClass {
 	/// <param name="w_vec specifies some of the special options/parameters used"></param>
 	/// <param name="inputScalars various scalar parameters defining the build parameters"></param>
 	/// <returns></returns>
-#if defined(CUDA) || defined(HIP)
-		inline STATUS_t createKernels(CUfunction & kernelFP, CUfunction & kernelBP, CUfunction & kernelNLM, CUfunction & kernelMed,
-			CUfunction & kernelRDP, CUfunction & kernelGGMRF, const CUmodule & programFP, const CUmodule & programBP, const CUmodule & programAux,
-			const RecMethods & MethodList, const Weighting & w_vec, const scalarStruct & inputScalars, const int type = -1) {
-#elif defined(METAL) || defined(OPENCL)
-		inline STATUS_t createKernels(KERHANDLE & kernelFP, KERHANDLE & kernelBP, KERHANDLE & kernelNLM, KERHANDLE & kernelMed,
-			KERHANDLE & kernelRDP, KERHANDLE & kernelGGMRF, const PRGHANDLE & programFP, const PRGHANDLE & programBP, const PRGHANDLE & programAux,
-			const PRGHANDLE & programSens, const RecMethods & MethodList, const Weighting & w_vec, const scalarStruct & inputScalars, const int type = -1) {
-#endif // END CUDA
+        inline STATUS_t createKernels(KERNELHANDLE_t & kernelFP, KERNELHANDLE_t & kernelBP, KERNELHANDLE_t & kernelNLM, KERNELHANDLE_t & kernelMed,
+			KERNELHANDLE_t & kernelRDP, KERNELHANDLE_t & kernelGGMRF, const PROGRAMHANDLE_t & programFP, const PROGRAMHANDLE_t & programBP, const PROGRAMHANDLE_t & programAux,
+#if defined(METAL) || defined(OPENCL)
+			const PROGRAMHANDLE_t & programSens, 
+#endif // END METAL/OPENCL
+            const RecMethods & MethodList, const Weighting & w_vec, const scalarStruct & inputScalars, const int type = -1) {
 			STATUS_t status = SUCCESS_VALUE;
 #if defined(METAL)
 #ifdef AF
@@ -2143,7 +2140,7 @@ public:
 	std::vector<cl::CommandQueue> CLCommandQueue;
 	OpenCL_im_vectors vec_opencl;
 #endif // END CUDA
-	KERHANDLE kernelMBSREM, kernelFP, kernelBP, kernelNLM, kernelMed, kernelRDP, kernelProxTVq, kernelProxTVDiv, kernelProxTVGrad, 
+	KERNELHANDLE_t kernelMBSREM, kernelFP, kernelBP, kernelNLM, kernelMed, kernelRDP, kernelProxTVq, kernelProxTVDiv, kernelProxTVGrad, 
 		kernelElementMultiply, kernelElementDivision, kernelTV, kernelProxTGVSymmDeriv, kernelProxTGVDiv, kernelProxTGVq, kernelPoisson, 
 		kernelPDHG, kernelProxRDP, kernelProxq, kernelProxTrans, kernelProxNLM, kernelGGMRF, kernelsumma, kernelEstimate, kernelPSF, 
 		kernelPSFf, kernelDiv, kernelMult, kernelForward, kernelSensList, kernelApu, kernelHyper, kernelRotate;
@@ -2767,7 +2764,7 @@ public:
 			return -1;
 		}
 #elif defined(METAL)
-		PRGHANDLE programFP, programBP, programAux, programSens;
+		PROGRAMHANDLE_t programFP, programBP, programAux, programSens;
 		status = createProgram(programFP, programBP, programAux, programSens, header_directory, inputScalars, MethodList, w_vec, local_size, type);
 		CHECK(status, "Error while creating Metal program\n", -1);
 #elif defined(OPENCL)
