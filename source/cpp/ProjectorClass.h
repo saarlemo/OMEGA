@@ -754,16 +754,25 @@ class ProjectorClass {
 			return nullptr;
 
 		const bool is3D = spec.force3D || spec.depth > 1;
-		NS::SharedPtr<MTL::TextureDescriptor> desc =
-			NS::TransferPtr(MTL::TextureDescriptor::alloc()->init());
+		// Reject unsupported dimensions before calling Metal. Without this check MATLAB would crash instead of returning cleanly.
+		constexpr NS::UInteger max2DDimension = 16384;
+		constexpr NS::UInteger max3DDimension = 2048;
+		const bool invalidDimensions = is3D
+			? (spec.width > max3DDimension || spec.height > max3DDimension || spec.depth > max3DDimension)
+			: (spec.width > max2DDimension || spec.height > max2DDimension);
+		if (invalidDimensions) {
+			mexPrintBase("Requested Metal texture dimensions: %llu x %llu x %llu\n", static_cast<unsigned long long>(spec.width), static_cast<unsigned long long>(spec.height), static_cast<unsigned long long>(is3D ? spec.depth : 1));
+			mexWarning("Metal 2D textures have a maximum dimension of 16384 and 3D textures have a maximum dimension of 2048. Reconstruction was stopped. Use buffers or reduce the size of the requested texture.");
+			return nullptr;
+		}
+		NS::SharedPtr<MTL::TextureDescriptor> desc = NS::TransferPtr(MTL::TextureDescriptor::alloc()->init());
 		desc->setTextureType(is3D ? MTL::TextureType::TextureType3D : MTL::TextureType::TextureType2D);
 		desc->setPixelFormat(spec.pixelFormat);
 		desc->setWidth(spec.width);
 		desc->setHeight(spec.height);
 		desc->setDepth(is3D ? spec.depth : 1);
 
-		Texture3D texture =
-			NS::TransferPtr(mtlDevice->newTexture(desc.get()));
+		Texture3D texture = NS::TransferPtr(mtlDevice->newTexture(desc.get()));
 		return texture;
 	}
 
@@ -888,7 +897,11 @@ class ProjectorClass {
 		nvrtcResult status = NVRTC_SUCCESS;
 #elif defined(METAL)
 		Status status = SUCCESS_VALUE;
+#ifdef AF
+		mtlDevice = NS::RetainPtr(afmtl::getDevice());
+#else
 		mtlDevice = NS::TransferPtr(MTL::CreateSystemDefaultDevice());
+#endif
 		if (!mtlDevice) {
 			mexPrint("No Metal device available");
 			return -1;
@@ -1807,19 +1820,21 @@ class ProjectorClass {
 	/// <param name="w_vec specifies some of the special options/parameters used"></param>
 	/// <param name="inputScalars various scalar parameters defining the build parameters"></param>
 	/// <returns></returns>
-#if defined(CUDA) || defined(HIP)
-		inline Status createKernels(CUfunction & kernelFP, CUfunction & kernelBP, CUfunction & kernelNLM, CUfunction & kernelMed,
-			CUfunction & kernelRDP, CUfunction & kernelGGMRF, const CUmodule & programFP, const CUmodule & programBP, const CUmodule & programAux,
-			const RecMethods & MethodList, const Weighting & w_vec, const scalarStruct & inputScalars, const int type = -1) {
-#elif defined(METAL) || defined(OPENCL)
-		inline Status createKernels(KernelHandle & kernelFP, KernelHandle & kernelBP, KernelHandle & kernelNLM, KernelHandle & kernelMed,
-			KernelHandle & kernelRDP, KernelHandle & kernelGGMRF, const ProgramHandle & programFP, const ProgramHandle & programBP, const ProgramHandle & programAux,
-			const ProgramHandle & programSens, const RecMethods & MethodList, const Weighting & w_vec, const scalarStruct & inputScalars, const int type = -1) {
-#endif // END CUDA
+        inline Status createKernels(KernelHandle & kernelFP, KernelHandle & kernelBP, KernelHandle & kernelNLM, KernelHandle & kernelMed, KernelHandle & kernelRDP, KernelHandle & kernelGGMRF, const ProgramHandle & programFP, const ProgramHandle & programBP, const ProgramHandle & programAux,
+#if defined(METAL) || defined(OPENCL)
+            const ProgramHandle & programSens,
+#endif
+            const RecMethods & MethodList, const Weighting & w_vec, const scalarStruct & inputScalars, const int type = -1) {
 			Status status = SUCCESS_VALUE;
 #if defined(METAL)
+#ifdef AF
+			MTL::CommandQueue* arrayFireQueue = afmtl::getQueue();
+			queueFP = NS::RetainPtr(arrayFireQueue);
+			queueBP = NS::RetainPtr(arrayFireQueue);
+#else
 			queueFP = NS::TransferPtr(mtlDevice->newCommandQueue());
 			queueBP = NS::TransferPtr(mtlDevice->newCommandQueue());
+#endif
 			if (!queueFP || !queueBP) {
 				mexPrint("Unable to create Metal command queues");
 				return -1;
@@ -2097,8 +2112,6 @@ public:
 	NS::SharedPtr<MTL::Device> mtlDevice;
 	NS::SharedPtr<MTL::CommandQueue> queueFP, queueBP;
 	METAL_im_vectors vec_opencl;
-	std::vector<void*> sensitivityHosts;
-	std::vector<size_t> sensitivityByteCounts;
 	ScalarKernelParams kParams;
 #endif // END METAL
 #if defined(CUDA) || defined(HIP)
@@ -2372,7 +2385,7 @@ public:
 		if (evMain != nullptr)
 			getErrorString(cuEventDestroy(evMain));
 	}
-#elif defined(OPENCL)
+#elif defined(OPENCL) || defined(METAL)
 	~ProjectorClass() {}
 #endif // END CUDA
 
@@ -2561,16 +2574,7 @@ public:
 			mexPrint(deviceName2.c_str());
 			mexEval();
 		}
-#endif // END CUDA
-#if defined(CUDA) || defined(HIP)
-		if (DEBUG || inputScalars.verbose >= 3) {
-			mexPrint("CUDA programs successfully created\n");
-		}
-#elif defined(METAL)
-		if (DEBUG || inputScalars.verbose >= 3) {
-			mexPrint("Metal programs successfully created\n");
-		}
-#elif defined(OPENCL)
+
 		UINT64_t constantBufferSize = CLDeviceID[0].getInfo<CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE>(&status);
 
 		if ((inputScalars.size_of_x + inputScalars.size_z) * sizeof(float) >= constantBufferSize)
@@ -2583,6 +2587,8 @@ public:
 			mexEval();
 		}
 #endif // END CUDA
+        if (DEBUG || inputScalars.verbose >= 3)
+            mexPrint(BACKEND_STR " programs successfully created\n");
 
 #if defined(CUDA) || defined(HIP)
 		status = createKernels(kernelFP, kernelBP, kernelNLM, kernelMed, kernelRDP, kernelGGMRF, programFP, programBP, programAux, MethodList, w_vec, inputScalars, type);
@@ -6594,14 +6600,6 @@ public:
 			encoder->dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup);
 			encoder->endEncoding();
 			commandBuffer->commit();
-			commandBuffer->waitUntilCompleted();
-			if (commandBuffer->status() == MTL::CommandBufferStatusError) {
-				NS::Error* error = commandBuffer->error();
-				const char* message = error && error->localizedDescription()
-					? error->localizedDescription()->utf8String() : "unknown Metal error";
-				mexPrintBase("Metal PDHG update failed: %s\n", message);
-				return -1;
-			}
 		}
 #elif defined(OPENCL)
 		status = (CLCommandQueue[0]).enqueueNDRangeKernel(kernelPDHG, cl::NullRange, global, localPrior);
@@ -6702,14 +6700,6 @@ public:
 			encoder->dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup);
 			encoder->endEncoding();
 			commandBuffer->commit();
-			commandBuffer->waitUntilCompleted();
-			if (commandBuffer->status() == MTL::CommandBufferStatusError) {
-				NS::Error* error = commandBuffer->error();
-				const char* message = error && error->localizedDescription()
-					? error->localizedDescription()->utf8String() : "unknown Metal error";
-				mexPrintBase("Metal bilinear rotation failed: %s\n", message);
-				return -1;
-			}
 		}
 #elif defined(OPENCL)
 		status = (CLCommandQueue[0]).enqueueNDRangeKernel(kernelRotate, cl::NullRange, globalPrior, localPrior);

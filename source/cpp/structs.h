@@ -30,6 +30,8 @@ typedef enum { CUBLAS_DEFAULT_MATH = 0, CUBLAS_TENSOR_OP_MATH = 1 } cublasMath_t
 #include <cstring>
 #elif defined(OPENCL)
 #include <af/opencl.h>
+#elif defined(METAL)
+#include <af/metal.h>
 #endif
 #endif
 

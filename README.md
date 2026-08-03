@@ -308,8 +308,8 @@ Intel GPUs might not support forward and/or backward projection masks.
 
 ### Apple / Metal / MacOS
 - Implementation 2 and 5 only
-- Tested with SPECT and CBCT examples
-- Supports projector types 1 and 2
+- Tested with selected SPECT and CBCT examples
+- Supports projector types 1, 2, 4, and 6
 - Requires Xcode, ArrayFire with the Metal backend, and the single-header metal-cpp `Metal.hpp`
 - Set `METALCPP_INCLUDE_PATH` to the folder containing `Metal.hpp`, e.g. `~/Documents/metal-cpp/include`
 - No Python support
