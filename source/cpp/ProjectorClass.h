@@ -4616,7 +4616,7 @@ public:
 #if defined(CUDA) || defined(HIP)
 	inline int backwardProjection(scalarStruct & inputScalars, Weighting & w_vec, uint32_t osa_iter, uint32_t timestep,
 		std::vector<int64_t>&length, uint64_t m_size, const RecMethods & MethodList = RecMethods(), const bool compSens = false, int ii = 0, const int uu = 0,
-		const int ee = -1, const int queueIdx = 0, const bool newInput = true) {
+		int ee = -1, const int queueIdx = 0, const bool newInput = true) {
 #elif defined(METAL) || defined(OPENCL)
 	// MethodList defaults to an empty RecMethods() so the METAL branch below keeps compiling unchanged
 	// TODO: Metal support for fastPDHG?
@@ -4629,13 +4629,11 @@ public:
 		STATUS_t status = SUCCESS_VALUE;
 #if defined(CUDA) || defined(HIP)
 		std::vector<void*> kTemp = BPArgs;
-#elif defined(OPENCL) || defined(METAL)
-		if (ee < 0)
-			ee = uu;
-#if defined(OPENCL)
+#elif defined(OPENCL)
 		kernelIndBPSubIter = kernelIndBP;
-#endif // END OPENCL
 #endif // END CUDA
+        if (ee < 0)
+			ee = uu;
 		if (inputScalars.listmode > 0 && compSens) {
 			kernelApu = kernelBP;
 			kernelBP = kernelSensList;
@@ -4863,20 +4861,8 @@ public:
 					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_scat[timestep][osa_iter]);
 				}
 			}
-#if defined(METAL)
 			KARG_METAL_SLOT(kernelIndBPSubIter, 12);
-			// The kernel signature always includes the sensitivity buffer, but
-			// no_norm guarantees that it is not accessed. Bind the current
-			// per-volume RHS buffer in that case instead of a dummy allocation.
-			// This also avoids an invalid Metal buffer binding for auxiliary
-			// multiresolution volumes in PDHG's power method.
-			const DEVBUFF_t& sensitivityBuffer = no_norm == 0 ? d_Summ[uu] : vec_opencl.d_rhs_os[uu];
-			KARG(kTemp, kernelBP, kernelIndBPSubIter, sensitivityBuffer);
-#elif defined(CUDA) || defined(HIP)
-			KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[uu]);
-#elif defined(OPENCL)
 			KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[ee]);
-#endif // END CUDA
 			KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, d_N[ii]);
 			KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, d[ii]);
 			KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, b[ii]);
@@ -5192,14 +5178,8 @@ public:
 					}
 					else
 						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_z[timestep][osa_iter]);
-#if defined(METAL)
 					KARG_METAL_SLOT(kernelIndBPSubIter, 7);
 					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[ee]);
-#elif defined(CUDA) || defined(HIP)
-					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[uu]);
-#elif defined(OPENCL)
-					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[ee]);
-#endif // END CUDA
 				}
 				else {
 					KARG_METAL_SLOT(kernelIndBPSubIter, 5);
@@ -5227,12 +5207,8 @@ public:
 					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_inputImage);
 					KARG_METAL_SLOT(kernelIndBPSubIter, 4);
 					KARG(kTemp, kernelBP, kernelIndBPSubIter, vec_opencl.d_rhs_os[uu]);
-#if defined(METAL) || defined(OPENCL)
 					KARG_METAL_SLOT(kernelIndBPSubIter, 7);
 					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[ee]);
-#elif defined(CUDA) || defined(HIP)
-					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[uu]);
-#endif // END CUDA
 					if (inputScalars.meanBP) {
 						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_meanBP);
 					}
@@ -5406,12 +5382,8 @@ public:
 					KARG_METAL_SLOT(kernelIndBPSubIter, 14);
 					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_scat[timestep][osa_iter]);
 				}
-#if defined(METAL) || defined(OPENCL)
 				KARG_METAL_SLOT(kernelIndBPSubIter, 15);
 				KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[ee]);
-#elif defined(CUDA) || defined(HIP)
-				KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[uu]);
-#endif // END CUDA
 				}
 			KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, no_norm);
 			if (inputScalars.CT && inputScalars.maskBP && (inputScalars.BPType == 4 || inputScalars.BPType == 5 || inputScalars.BPType == 7)) {

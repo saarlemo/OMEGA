@@ -1,5 +1,8 @@
 # Release notes
 
+- CUDA support for MATLAB projection operators
+  - `options.use_CUDA` controls the backend as with implementation 2
+
 Metal features:
 - ArrayFire support for Metal
 - Projector type 4 supports texture input with Metal
@@ -8,6 +11,7 @@ Metal features:
 Metal bug fixes:
 - Fixed texture input for standalone Metal projector calls
 - Fixed the missing Metal definition for projector type 4
+
 
 ## OMEGA v2.3.0
 
