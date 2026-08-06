@@ -6,6 +6,8 @@ Created on Thu Jul 10 13:25:14 2025
 import numpy as np
 
 def conv3D(self, f, ii = 0):
+    if getattr(self, "useMetal", False):
+        raise NotImplementedError("The separate PSF convolution kernel is not yet wired to the Metal/MPS bridge.")
     globalSize = (self.Nx[ii].item() + self.erotusBP[ii * 2], self.Ny[ii].item() + self.erotusBP[ii * 2 + 1], self.Nz[ii].item())
     kInd = 0
     if self.useCUDA:
@@ -86,6 +88,9 @@ def conv3D(self, f, ii = 0):
 def forwardProjection(self, f, subset = -1):
     if subset == -1:
         subset = self.subset
+    if getattr(self, "useMetal", False):
+        from omegatomo.projector.mps_backend import forward_projection_mps
+        return forward_projection_mps(self, f, subset)
     volumes = 0
     if self.projector_type == 6:
         if not self.useCUDA:
@@ -735,6 +740,9 @@ def forwardProjection(self, f, subset = -1):
 def backwardProjection(self, y, subset = -1):
     if subset == -1:
         subset = self.subset
+    if getattr(self, "useMetal", False):
+        from omegatomo.projector.mps_backend import backward_projection_mps
+        return backward_projection_mps(self, y, subset)
     if self.nMultiVolumes > 0:
         f = [None] * (self.nMultiVolumes + 1)
     volumes = 0

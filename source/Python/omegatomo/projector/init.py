@@ -59,10 +59,17 @@ def initProjector(self):
         raise ValueError('Arrayfire and PyTorch cannot be used at the same time! Select only one!')
     if self.useTorch:
         import torch
-        torch.cuda.init()
-        self.useCuPy = True
-    if self.useTorch and not self.useCUDA:
-        raise ValueError('PyTorch does not work with OpenCL! You can still use OpenCL manually with PyTorch, but you have to manually transfer the OpenCL data first to host (NumPy array) and then to Torch (or vice versa, i.e. Torch --> NumPy --> OpenCL)')
+        if self.useMetal:
+            if self.useCUDA:
+                raise ValueError('Select either Metal/MPS or CUDA, not both.')
+            if not torch.backends.mps.is_available():
+                raise RuntimeError('PyTorch MPS is not available on this machine.')
+            self.useCuPy = False
+        else:
+            torch.cuda.init()
+            self.useCuPy = True
+    if self.useTorch and not self.useCUDA and not self.useMetal:
+        raise ValueError('PyTorch with the OMEGA OpenCL backend would require host staging. Select CUDA or the native Metal/MPS backend.')
     if self.useCuPy and self.useCUDA:
         import cupy as cp
     elif self.useCuPy and not self.useCUDA:
@@ -85,7 +92,7 @@ def initProjector(self):
                 return "rocm" in lower or "hip" in lower
             except Exception:
                 return False
-    if not self.useCUDA:
+    if not self.useCUDA and not self.useMetal:
         import pyopencl as cl
         from pyopencl.version import VERSION
         
@@ -248,7 +255,13 @@ def initProjector(self):
         
         self.Nxy = self.Nx[0].item() * self.Ny[0].item()
         vendor = ''
-        if self.useCUDA:
+        if self.useMetal:
+            # The Metal branch compiles FP/BP source once below. The
+            # existing bOpt logic remains the single source of specialization.
+            bOpt = ('-DMETAL',)
+            self.use_64bit_atomics = False
+            self.use_32bit_atomics = False
+        elif self.useCUDA:
             if self.use_64bit_atomics or self.use_32bit_atomics:
                 self.use_64bit_atomics = False
                 self.use_32bit_atomics = False
@@ -275,7 +288,9 @@ def initProjector(self):
                 self.use_32bit_atomics = False
                 bOpt += ('-DINTEL',)
         if self.useMAD:
-            if self.useCUDA and cupyROCm():
+            if self.useMetal:
+                bOpt += ('-DUSEMAD',)
+            elif self.useCUDA and cupyROCm():
                 bOpt += ('-ffast-math','-DUSEMAD',)
             elif self.useCUDA:
                 bOpt += ('--use_fast_math','-DUSEMAD',)
@@ -453,6 +468,19 @@ def initProjector(self):
             self.d_gFilter = af.interop.np_to_af_array(self.gFilter)
         self.uu = 0
     
+    if self.useMetal:
+        # Compile FP + BP
+        from omegatomo.projector.mps_backend import init_mps_projector
+        init_mps_projector(
+            self,
+            source_root=headerDir,
+            source_fp=linesFP,
+            source_bp=linesBP,
+            options_fp=bOptFP,
+            options_bp=bOptBP,
+        )
+        return
+
     if self.useCUDA:
         self.no_norm = 1
         self.mSize = self.nRowsD * self.nColsD * self.nProjections

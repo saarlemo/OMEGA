@@ -462,6 +462,7 @@ class projectorClass:
     useAF = False
     useTorch = False
     useCuPy = False
+    useMetal = False
     dualLayerSubmodule = False
     storeResidual = False
     useFDKWeights = True
