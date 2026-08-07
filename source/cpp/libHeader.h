@@ -827,11 +827,12 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
         inputScalars.T = options.offsetVal;
     inputScalars.nProjections = options.nProjections;
     inputScalars.subsetType = options.subsetType;
+    inputScalars.d_Scale4.resize(inputScalars.nMultiVolumes + 1);
+    inputScalars.dSize.resize(inputScalars.nMultiVolumes + 1);
+    inputScalars.d_Scale.resize(inputScalars.nMultiVolumes + 1);
     if (inputScalars.FPType == 4 || inputScalars.FPType == 5 || inputScalars.BPType == 4 || inputScalars.BPType == 5) {
         inputScalars.dL = options.dL;
-        inputScalars.d_Scale4.resize(inputScalars.nMultiVolumes + 1);
-        inputScalars.dSize.resize(inputScalars.nMultiVolumes + 1);
-        inputScalars.d_Scale.resize(inputScalars.nMultiVolumes + 1);
+        
         float* dScaleX4 = options.dScaleX4;
         float* dScaleY4 = options.dScaleY4;
         float* dScaleZ4 = options.dScaleZ4;
@@ -1253,7 +1254,7 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
         w_vec.U = options.U;
     }
     if (DEBUG && (MethodList.MRAMLA || MethodList.MBSREM || MethodList.SPS || MethodList.RAMLA || MethodList.BSREM || MethodList.ROSEM || MethodList.ROSEMMAP || MethodList.PKMA)) {
-        mexPrintBase("w_vec.lambda[0] = %f\n", w_vec.lambda[0]);
+        mexPrintBase("w_vec.lambda[0][0] = %f\n", w_vec.lambda[0][0]);
         mexEval();
     }
     if (w_vec.precondTypeIm[3])
@@ -1374,8 +1375,8 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
         inputScalars.FISTAType = options.FISTAType;
         if (DEBUG) {
             mexPrint("CPType loaded");
-            mexPrintBase("w_vec.sigma2CP = %d\n", w_vec.sigma2CP[0]);
-            mexPrintBase("w_vec.sigmaCP = %d\n", w_vec.sigmaCP[0]);
+            mexPrintBase("w_vec.sigma2CP = %d\n", w_vec.sigma2CP[0][0]);
+            mexPrintBase("w_vec.sigmaCP = %d\n", w_vec.sigmaCP[0][0]);
             mexPrintBase("w_vec.alpha1CPTGV = %d\n", w_vec.alpha1CPTGV);
             mexPrintBase("w_vec.alpha0CPTGV = %d\n", w_vec.alpha0CPTGV);
             mexPrintBase("options.sigma2CP = %d\n", options.sigma2CP[0]);
