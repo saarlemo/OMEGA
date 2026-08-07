@@ -27,18 +27,17 @@ options = proj.projectorClass()
 # Path to .mat file
 options.fpath = './jaszczak_spectct_projection_data.mat' 
 
-# Select backend
-options.useMetal = True 
-options.useCUDA = False
 
-
+# Set PyTorch backend
 options.SPECT = True # Required for SPECT data
-options.useTorch = True
-if options.useMetal:
+options.useTorch = True # Use PyTorch tensors for storing data
+if sys.platform == 'darwin':
+    options.useMetal = True
     device = torch.device("mps")
-elif options.useCUDA:
+else:
+    options.useCUDA = True
+    options.useCuPy = True # Use CuPy, PyCUDA support is deprecated
     device = torch.device("cuda")
-    options.useCuPy = True # Use CuPy instead of PyCUDA?
 
 
 ###########################################################################
@@ -363,8 +362,8 @@ model = UNet().to(device)
 optimizer = torch.optim.LBFGS(
     model.parameters(),
     lr=1.0,
-    max_iter=1,
-    max_eval=1,
+    max_iter=80,
+    max_eval=100,
     history_size=20,
     tolerance_grad=1e-7,
     tolerance_change=1e-9,

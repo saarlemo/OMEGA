@@ -11,8 +11,8 @@ New features:
   - `options.use_CUDA` controls the backend as with implementation 2
 - Initial Metal support for PyTorch projection operators
   - SPECT only, no corrections (yet)
-  - See new example
-- Metal support for reconstructions with ArrayFire backend 
+  - See PyTorch examples
+- Metal support for reconstructions with ArrayFire backend (both Python and MATLAB)
 
 Bug fixes:
 - Fixed texture input for standalone Metal projector calls
