@@ -128,7 +128,23 @@ def _indexed_int(obj: Any, name: str, index: int, default: int = 0) -> int:
     return int(flat[index])
 
 
-def _pack_scalar_kernel_params(self: Any, subset: int, volume: int) -> bytes:
+def _frame_subset_int(self: Any, name: str, timestep: int, subset: int, default: int = 0) -> int:
+    value = getattr(self, name, None)
+    if value is None:
+        return int(default)
+    arr = np.asarray(value)
+    if arr.size == 0:
+        return int(default)
+    if arr.ndim >= 2:
+        return int(arr[timestep, subset])
+    frame_count = int(getattr(self, 'Nt', 1))
+    subset_count = int(getattr(self, 'subsets', 1))
+    if arr.size == frame_count * subset_count:
+        return int(arr.reshape(frame_count, subset_count)[timestep, subset])
+    return int(arr[subset])
+
+
+def _pack_scalar_kernel_params(self: Any, timestep: int, subset: int, volume: int) -> bytes:
     """Pack ScalarKernelParams using the ABI in kernelParams.hpp.
 
     Add a host-side static_assert(sizeof(ScalarKernelParams) == 336) to the
@@ -247,9 +263,9 @@ def _pack_scalar_kernel_params(self: Any, subset: int, volume: int) -> bytes:
     )
     f3("d_bmax", (bx + nx * dx, by + ny * dy, bz + nz * dz))
     f32("orthWidth", _scalar(getattr(self, "tube_width_z", 0.0)))
-    i64("nProjections", _indexed_int(self, "nProjSubset", subset, 0))
+    i64("nProjections", _frame_subset_int(self, "nProjSubset", timestep, subset, 0))
     u8("no_norm", _int_scalar(getattr(self, "no_norm", 1), 1))
-    u64("m_size", _indexed_int(self, "nMeasSubset", subset, 0))
+    u64("m_size", _frame_subset_int(self, "nMeasSubset", timestep, subset, 0))
     u32("currentSubset", subset)
     i32("aa", volume)
 
@@ -550,20 +566,36 @@ def init_mps_projector(
     self.mps_dummy_buffer = torch.zeros(1, dtype=torch.uint8, device='mps')
     self.d_Sens = torch.zeros(1, dtype=torch.float32, device='mps')
 
-    self.d_x = [None] * self.subsets
-    self.d_z = [None] * self.subsets
-    x_flat = np.asarray(self.x, dtype=np.float32).ravel()
-    z_flat = np.asarray(self.z, dtype=np.float32).ravel()
+    self.d_x = [[None] * self.subsets for _ in range(self.Nt)]
+    self.d_z = [[None] * self.subsets for _ in range(self.Nt)]
+    x_frames = getattr(self, 'xFrames', None)
+    z_frames = getattr(self, 'zFrames', None)
+    if not isinstance(x_frames, list) or len(x_frames) != self.Nt:
+        if self.Nt > 1:
+            raise ValueError('Dynamic Metal/MPS projection geometry must provide one xFrames entry per timeframe.')
+        x_flat = np.asarray(self.x, dtype=np.float32).ravel()
+        x_frames = [x_flat]
+    if not isinstance(z_frames, list) or len(z_frames) != self.Nt:
+        if self.Nt > 1:
+            raise ValueError('Dynamic Metal/MPS projection geometry must provide one zFrames entry per timeframe.')
+        z_flat = np.asarray(self.z, dtype=np.float32).ravel()
+        z_frames = [z_flat]
     z_stride = 6 if self.pitch else 2
-    for subset in range(self.subsets):
-        start = _indexed_int(self, 'nMeas', subset)
-        stop = _indexed_int(self, 'nMeas', subset + 1)
-        self.d_x[subset] = _mps_tensor_from_numpy(
-            torch, x_flat[start * 6 : stop * 6], np.float32
-        )
-        self.d_z[subset] = _mps_tensor_from_numpy(
-            torch, z_flat[start * z_stride : stop * z_stride], np.float32
-        )
+    for timestep in range(self.Nt):
+        x_frame = np.asarray(x_frames[timestep], dtype=np.float32).ravel(order='F')
+        z_frame = np.asarray(z_frames[timestep], dtype=np.float32).ravel(order='F')
+        subset_offsets = np.concatenate(([0], np.cumsum(
+            np.asarray(self.nProjSubset[timestep], dtype=np.int64), dtype=np.int64
+        )))
+        for subset in range(self.subsets):
+            start = int(subset_offsets[subset])
+            stop = int(subset_offsets[subset + 1])
+            self.d_x[timestep][subset] = _mps_tensor_from_numpy(
+                torch, x_frame[start * 6 : stop * 6], np.float32
+            )
+            self.d_z[timestep][subset] = _mps_tensor_from_numpy(
+                torch, z_frame[start * z_stride : stop * z_stride], np.float32
+            )
 
     self.d_rayShiftsDetector = _mps_tensor_from_numpy(
         torch, self.rayShiftsDetector, np.float32
@@ -572,25 +604,28 @@ def init_mps_projector(
         torch, self.rayShiftsSource, np.float32
     )
 
-    # One immutable ScalarKernelParams buffer per subset/volume.
+    # One immutable ScalarKernelParams buffer per timeframe/subset/volume.
     self.mps_scalar_params = []
-    for subset in range(self.subsets):
-        per_volume = []
-        for volume in range(self.nMultiVolumes + 1):
-            blob = _pack_scalar_kernel_params(self, subset, volume)
-            cpu_bytes = np.frombuffer(blob, dtype=np.uint8).copy()
-            per_volume.append(torch.as_tensor(cpu_bytes, device='mps'))
-        self.mps_scalar_params.append(per_volume)
+    for timestep in range(self.Nt):
+        per_subset = []
+        for subset in range(self.subsets):
+            per_volume = []
+            for volume in range(self.nMultiVolumes + 1):
+                blob = _pack_scalar_kernel_params(self, timestep, subset, volume)
+                cpu_bytes = np.frombuffer(blob, dtype=np.uint8).copy()
+                per_volume.append(torch.as_tensor(cpu_bytes, device='mps'))
+            per_subset.append(per_volume)
+        self.mps_scalar_params.append(per_subset)
 
 
-def _kernel_args(self: Any, scalar_params: Any, dynamic_input: Any, output: Any, subset: int) -> list[Any]:
+def _kernel_args(self: Any, scalar_params: Any, dynamic_input: Any, output: Any, subset: int, timestep: int) -> list[Any]:
     """Construct positional arguments matching explicit Metal buffer indices 0..20."""
     args = [self.mps_dummy_buffer] * 21
     args[0] = scalar_params
     args[1] = self.d_rayShiftsDetector
     args[2] = self.d_rayShiftsSource
-    args[8] = self.d_x[subset]
-    args[9] = self.d_z[subset]
+    args[8] = self.d_x[timestep][subset]
+    args[9] = self.d_z[timestep][subset]
     args[12] = self.d_Sens
     args[19] = dynamic_input
     args[20] = output
@@ -609,12 +644,17 @@ def _require_mps_float32_contiguous(tensor: Any, name: str) -> Any:
     return tensor.contiguous()
 
 
-def forward_projection_mps(self: Any, f: Any, subset: int = -1) -> Any:
+def forward_projection_mps(self: Any, f: Any, subset: int = -1, timestep: int = -1) -> Any:
     import torch
 
     if subset == -1:
         subset = self.subset
+    if timestep == -1:
+        timestep = self.timestep
     subset = int(subset)
+    timestep = int(timestep)
+    if not 0 <= timestep < self.Nt or not 0 <= subset < self.subsets:
+        raise IndexError('timestep and subset must identify an initialized frame/subset pair')
     f = _require_mps_float32_contiguous(f, 'forward image')
     if f.numel() != _indexed_int(self, 'N', 0):
         raise ValueError(
@@ -622,40 +662,45 @@ def forward_projection_mps(self: Any, f: Any, subset: int = -1) -> Any:
         )
 
     if self.subsetType > 7 or self.subsets == 1:
-        output_size = int(self.nRowsD * self.nColsD * self.nProjSubset[subset].item())
+        output_size = int(self.nRowsD * self.nColsD * _frame_subset_int(self, 'nProjSubset', timestep, subset))
     else:
-        output_size = int(self.nMeasSubset[subset].item())
+        output_size = _frame_subset_int(self, 'nMeasSubset', timestep, subset)
     output = torch.zeros(output_size, dtype=torch.float32, device='mps')
 
-    args = _kernel_args(self, self.mps_scalar_params[subset][0], f, output, subset)
+    args = _kernel_args(self, self.mps_scalar_params[timestep][subset][0], f, output, subset, timestep)
     self.knlF(
         *args,
-        threads=tuple(int(v) for v in self.globalSizeFP[subset]),
+        threads=tuple(int(v) for v in self.globalSizeFP[timestep][subset]),
         group_size=tuple(int(v) for v in self.localSizeFP),
     )
     return output
 
 
-def backward_projection_mps(self: Any, y: Any, subset: int = -1) -> Any:
+def backward_projection_mps(self: Any, y: Any, subset: int = -1, timestep: int = -1) -> Any:
     import torch
 
     if subset == -1:
         subset = self.subset
+    if timestep == -1:
+        timestep = self.timestep
     subset = int(subset)
+    timestep = int(timestep)
+    if not 0 <= timestep < self.Nt or not 0 <= subset < self.subsets:
+        raise IndexError('timestep and subset must identify an initialized frame/subset pair')
     y = _require_mps_float32_contiguous(y, 'backprojection input')
 
     if self.subsetType > 7 or self.subsets == 1:
-        expected = int(self.nRowsD * self.nColsD * self.nProjSubset[subset].item())
+        expected = int(self.nRowsD * self.nColsD * _frame_subset_int(self, 'nProjSubset', timestep, subset))
     else:
-        expected = int(self.nMeasSubset[subset].item())
+        expected = _frame_subset_int(self, 'nMeasSubset', timestep, subset)
     if y.numel() != expected:
         raise ValueError(f'Backprojection input has {y.numel()} elements, expected {expected}')
 
     output = torch.zeros(_indexed_int(self, 'N', 0), dtype=torch.float32, device='mps')
-    args = _kernel_args(self, self.mps_scalar_params[subset][0], y, output, subset)
+    args = _kernel_args(self, self.mps_scalar_params[timestep][subset][0], y, output, subset, timestep)
     self.knlB(
         *args,
-        threads=tuple(int(v) for v in self.globalSizeBP[subset][0]),
+        threads=tuple(int(v) for v in self.globalSizeBP[timestep][subset][0]),
         group_size=tuple(int(v) for v in self.localSizeBP),
     )
     return output

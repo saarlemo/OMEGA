@@ -36,8 +36,10 @@ from .indices import formSubsetIndices
 class projectorClass:
     # These parameters are either NumPy arrays or variables that are not needed in the C++ code
     x = np.empty(0, dtype = np.float32)
+    xFrames = []
     y = np.empty(0, dtype = np.float32)
     z = np.empty(0, dtype = np.float32)
+    zFrames = []
     x0 = np.empty(0, dtype = np.float32)
     Nx = 1
     Ny = 1
@@ -281,6 +283,7 @@ class projectorClass:
     compute_sensitivity_image = False
     listmode = 0
     nProjections = 1
+    nProjectionsPerFrame = np.empty(0, dtype=np.int64)
     Ndist = 400
     Nang = 1
     NSinos = 1
@@ -457,6 +460,7 @@ class projectorClass:
     gFSize = None
     trans = False
     subset = 0
+    timestep = 0
     largeDim = False
     loadTOF = True
     useAF = False
@@ -572,6 +576,30 @@ class projectorClass:
                 self.angles = self.angles + self.offangle
             setCTCoordinates(self)
         if self.SPECT:
+            # Dynamic SPECT projection images are represented as one list entry
+            # per timeframe.  A four-dimensional input keeps the same temporal
+            # ordering when normalized here.
+            if isinstance(self.SinM, np.ndarray) and self.SinM.size > 0:
+                if self.SinM.ndim == 4:
+                    self.SinM = [self.SinM[:, :, :, tt] for tt in range(self.SinM.shape[3])]
+                #else:
+                #    self.SinM = [self.SinM]
+            if isinstance(self.SinM, list) and self.SinM:
+                self.Nt = len(self.SinM)
+                self.nProjectionsPerFrame = np.asarray(
+                    [np.asarray(frame).shape[2] for frame in self.SinM],
+                    dtype=np.int64,
+                )
+                if np.any(self.nProjectionsPerFrame < 1):
+                    raise ValueError('Every dynamic SPECT timeframe must contain at least one projection image.')
+                total_projections = int(np.sum(self.nProjectionsPerFrame))
+                if self.angles.size != total_projections or self.radiusPerProj.size != total_projections:
+                    raise ValueError('Dynamic SPECT angles and radii must contain one value for every projection image across all timeframes.')
+                if self.swivelAngles.size not in (0, total_projections):
+                    raise ValueError('Dynamic SPECT swivelAngles must contain one value for every projection image across all timeframes.')
+                self.nProjections = int(np.max(self.nProjectionsPerFrame))
+            elif isinstance(self.SinM, np.ndarray) and self.SinM.size > 0:
+                self.nProjectionsPerFrame = np.asarray([self.nProjections], dtype=np.int64)
             if self.totalFOVxmin == 0:
                 self.totalFOVxmin = -self.FOVa_x / 2
             if self.totalFOVymin == 0:
@@ -584,25 +612,34 @@ class projectorClass:
                 self.totalFOVymax = self.FOVa_y / 2
             if self.totalFOVzmax == 0:
                 self.totalFOVzmax = self.axial_fov / 2 
-            if self.projector_type == 6 and len(self.SinM > 0):
+            if self.projector_type == 6 and ((isinstance(self.SinM, list) and self.SinM) or (isinstance(self.SinM, np.ndarray) and self.SinM.size > 0)):
                 endSinogramRows = self.FOVa_x / self.dPitchX; # Desired amount of sinogram rows
                 endSinogramCols = self.axial_fov / self.dPitchY; # Desired amount of sinogram columns
                 padRows = int((endSinogramRows-self.nRowsD)/2) # Pad this amount on both sides
                 padCols = int((endSinogramCols-self.nColsD)/2) # Pad this amount on both sides
-                if padRows < 0:
-                    self.SinM = self.SinM[-padRows:padRows, :, :]
-                if padRows > 0:
-                    self.SinM = np.pad(self.SinM, ((padRows, padRows), (0, 0), (0, 0)))
-                if padCols < 0:
-                    self.SinM = self.SinM[:, -padCols:padCols, :]
-                if padCols > 0:
-                    self.SinM = np.pad(self.SinM, ((0, 0), (padCols, padCols), (0, 0)))
+                def resize_sinogram(frame):
+                    if padRows < 0:
+                        frame = frame[-padRows:padRows, :, :]
+                    if padRows > 0:
+                        frame = np.pad(frame, ((padRows, padRows), (0, 0), (0, 0)))
+                    if padCols < 0:
+                        frame = frame[:, -padCols:padCols, :]
+                    if padCols > 0:
+                        frame = np.pad(frame, ((0, 0), (padCols, padCols), (0, 0)))
+                    return frame
+                if isinstance(self.SinM, list):
+                    self.SinM = [resize_sinogram(frame) for frame in self.SinM]
+                else:
+                    self.SinM = resize_sinogram(self.SinM)
                 self.nRowsD = self.Nx; # Set new sinogram size
                 self.nColsD = self.Nz; # Set new sinogram size
                 
                 # Now the sinogram and FOV XZ-plane match in physical dimensions but not in resolution.
                 from skimage.transform import resize
-                self.SinM = resize(self.SinM, (self.Nx, self.Nz), order=0, mode = 'reflect', anti_aliasing = True, preserve_range=True)
+                if isinstance(self.SinM, list):
+                    self.SinM = [resize(frame, (self.Nx, self.Nz, frame.shape[2]), order=0, mode='reflect', anti_aliasing=True, preserve_range=True) for frame in self.SinM]
+                else:
+                    self.SinM = resize(self.SinM, (self.Nx, self.Nz), order=0, mode = 'reflect', anti_aliasing = True, preserve_range=True)
                 
             if self.swivelAngles.size == 0:
                 self.swivelAngles = self.angles + 180
@@ -621,7 +658,10 @@ class projectorClass:
                     self.vaimennus = np.flip(self.vaimennus, 3)
                     
             if self.flipImageZ:
-                self.SinM = np.flip(self.SinM, axis=2)
+                if isinstance(self.SinM, list):
+                    self.SinM = [np.flip(frame, axis=2) for frame in self.SinM]
+                else:
+                    self.SinM = np.flip(self.SinM, axis=2)
             
             self.n_rays_transaxial = self.nRays
             self.NSinos = self.nProjections
@@ -742,7 +782,9 @@ class projectorClass:
             self.rings = rings
             # self.detectors = det_per_ring * rings;
         
-        if isinstance(self.partitions, np.ndarray):
+        if isinstance(self.SinM, list) and self.SinM:
+            self.Nt = len(self.SinM)
+        elif isinstance(self.partitions, np.ndarray):
             if self.partitions.size >= 1:
                 self.Nt = self.partitions.size
             # else:
@@ -944,7 +986,8 @@ class projectorClass:
 
         # self.size_x = size_x
         # self.totMeas = self.nColsD * self.nRowsD * self.nProjections
-        self.nMeas = np.insert(np.cumsum(self.nMeas),0, 0)
+        self.nMeasPerFrameSubset = np.asarray(self.nMeasPerFrameSubset, dtype=np.int64)
+        self.nMeas = np.insert(np.cumsum(self.nMeasPerFrameSubset.reshape(-1)), 0, 0)
         if not isinstance(self.Nx, np.ndarray):
             self.Nx = np.array(self.Nx, dtype=np.uint32, ndmin=1)
         if not isinstance(self.Ny, np.ndarray):
@@ -954,32 +997,76 @@ class projectorClass:
         xx, yy, zz = computePixelSize(self)
         formSubsetIndices(self)
         if ((self.CT or self.PET or self.SPECT) and self.projector_type != 6) and self.listmode == 0:
-            if self.subsetType >= 8 and self.subsets > 1 and not self.FDK:
+            if ((self.subsetType >= 8 and self.subsets > 1) or (self.SPECT and self.subsets == 1)) and not self.FDK:
                 if self.CT:
+                    frame_index = self.index[0] if isinstance(self.index, list) and self.Nt == 1 else self.index
                     x_det = np.reshape(x_det, (self.nProjections, 6))
-                    x_det = x_det[self.index,:]
+                    x_det = x_det[frame_index,:]
                     x_det = x_det.ravel('C')
                     if self.pitch:
                         z_det = np.reshape(z_det, (self.nProjections, 6))
-                        z_det = z_det[self.index,:]
+                        z_det = z_det[frame_index,:]
                         z_det = z_det.ravel('C')
                     elif self.useHelical:
-                        z_det = z_det[self.index]
+                        z_det = z_det[frame_index]
                     else:
                         z_det = np.reshape(z_det, (self.nProjections, 2))
-                        z_det = z_det[self.index,:]
+                        z_det = z_det[frame_index,:]
                         z_det = z_det.ravel('C')
                 elif self.SPECT:
-                    x_det = x_det[:,self.index]
-                    x_det = x_det.ravel('F')
-                    z_det = z_det[:,self.index]
-                    z_det = z_det.ravel('F')
+                    projection_counts = np.asarray(self.nProjectionsPerFrame, dtype=np.int64).reshape(-1)
+                    if projection_counts.size != self.Nt:
+                        raise ValueError('nProjectionsPerFrame must contain one value per SPECT timeframe.')
+                    if int(np.sum(projection_counts)) != x_det.shape[1] or int(np.sum(projection_counts)) != z_det.shape[1]:
+                        raise ValueError('Concatenated SPECT geometry does not match nProjectionsPerFrame.')
+                    self.xFrames = []
+                    self.zFrames = []
+                    frame_offsets = np.concatenate(([0], np.cumsum(projection_counts, dtype=np.int64)))
+                    for timestep in range(self.Nt):
+                        frame_start = int(frame_offsets[timestep])
+                        frame_stop = int(frame_offsets[timestep + 1])
+                        x_frame = x_det[:, frame_start:frame_stop]
+                        z_frame = z_det[:, frame_start:frame_stop]
+                        frame_index = self.index[timestep] if isinstance(self.index, list) else self.index
+                        if self.subsetType >= 8 or self.subsets == 1:
+                            x_frame = x_frame[:, frame_index]
+                            z_frame = z_frame[:, frame_index]
+                        self.xFrames.append(np.asfortranarray(x_frame))
+                        self.zFrames.append(np.asfortranarray(z_frame))
+                    x_det = np.concatenate([frame.ravel(order='F') for frame in self.xFrames])
+                    z_det = np.concatenate([frame.ravel(order='F') for frame in self.zFrames])
                 else:
+                    frame_index = self.index[0] if isinstance(self.index, list) and self.Nt == 1 else self.index
                     z_det = np.reshape(z_det, (self.nProjections, -1))
-                    z_det = z_det[self.index,:]
+                    z_det = z_det[frame_index,:]
                     z_det = z_det.ravel('C')
                 if self.CT and not self.useHelical:
-                    self.uV = self.uV[self.index,:]
+                    frame_index = self.index[0] if isinstance(self.index, list) and self.Nt == 1 else self.index
+                    self.uV = self.uV[frame_index,:]
+        if self.SPECT and self.listmode == 0 and self.projector_type != 6 and (
+            not isinstance(getattr(self, 'xFrames', None), list)
+            or len(self.xFrames) != self.Nt
+        ):
+            projection_counts = np.asarray(self.nProjectionsPerFrame, dtype=np.int64).reshape(-1)
+            if int(np.sum(projection_counts)) != x_det.shape[1]:
+                raise ValueError('Concatenated SPECT geometry does not match nProjectionsPerFrame.')
+            self.xFrames = []
+            self.zFrames = []
+            frame_offsets = np.concatenate(([0], np.cumsum(projection_counts, dtype=np.int64)))
+            for timestep in range(self.Nt):
+                frame_start = int(frame_offsets[timestep])
+                frame_stop = int(frame_offsets[timestep + 1])
+                x_frame = x_det[:, frame_start:frame_stop]
+                z_frame = z_det[:, frame_start:frame_stop]
+                frame_index = self.index[timestep] if isinstance(self.index, list) else self.index
+                if self.subsetType >= 8 or self.subsets == 1:
+                    x_frame = x_frame[:, frame_index]
+                    z_frame = z_frame[:, frame_index]
+                self.xFrames.append(np.asfortranarray(x_frame))
+                self.zFrames.append(np.asfortranarray(z_frame))
+            x_det = np.concatenate([frame.ravel(order='F') for frame in self.xFrames])
+            z_det = np.concatenate([frame.ravel(order='F') for frame in self.zFrames])
+
         if self.listmode == 0 and self.projector_type != 6:
             if self.SPECT:
                 self.x = x_det.ravel('F')
@@ -1001,11 +1088,23 @@ class projectorClass:
             SPECTParameters(self)
         if self.projector_type == 6:
             if self.subsets > 1 and (self.subsetType == 8 or self.subsetType == 9 or self.subsetType == 10 or self.subsetType == 11):
-                self.angles = self.angles[self.index]
-                self.swivelAngles = self.swivelAngles[self.index]
-                self.radiusPerProj = self.radiusPerProj[self.index]
-                self.blurPlanes = self.blurPlanes[self.index]
-                self.blurPlanes2 = self.blurPlanes2[self.index]
+                geometry_fields = ('angles', 'swivelAngles', 'radiusPerProj', 'blurPlanes', 'blurPlanes2')
+                if isinstance(self.index, list):
+                    projection_counts = np.asarray(self.nProjectionsPerFrame, dtype=np.int64).reshape(-1)
+                    frame_offsets = np.concatenate(([0], np.cumsum(projection_counts, dtype=np.int64)))
+                    for field in geometry_fields:
+                        values = np.asarray(getattr(self, field))
+                        reordered = []
+                        for timestep in range(self.Nt):
+                            frame_values = values[frame_offsets[timestep] : frame_offsets[timestep + 1]]
+                            reordered.append(frame_values[self.index[timestep]])
+                        setattr(self, field, np.concatenate(reordered))
+                    self.projectionFrameOffsets = np.concatenate(
+                        ([0], np.cumsum(projection_counts, dtype=np.int64))
+                    )
+                else:
+                    for field in geometry_fields:
+                        setattr(self, field, np.asarray(getattr(self, field))[self.index])
             #self.gFilter = self.gFilter.ravel('F').astype(dtype=np.float32)
         ## This part is used when the observation matrix is calculated on-the-fly
 
@@ -1018,12 +1117,11 @@ class projectorClass:
             kerroin = self.nColsD * self.nRowsD
         else:
             kerroin = 1
-        self.nMeasSubset = np.zeros((self.subsets, 1), dtype = np.int64);
-        self.nProjSubset = np.zeros((self.subsets, 1), dtype = np.int64);
+        self.nMeasSubset = np.zeros((self.Nt, self.subsets), dtype=np.int64)
+        self.nProjSubset = np.zeros((self.Nt, self.subsets), dtype=np.int64)
         self.nTotMeas = self.nMeas * kerroin
-        for kk in range(self.subsets):
-            self.nMeasSubset[kk] = self.nMeas[kk + 1] * kerroin - self.nMeas[kk] * kerroin
-            self.nProjSubset[kk] = self.nMeas[kk + 1] - self.nMeas[kk]
+        self.nMeasSubset[:, :] = self.nMeasPerFrameSubset * kerroin
+        self.nProjSubset[:, :] = self.nMeasPerFrameSubset
         if self.listmode == 1:
             self.x = self.x.astype(dtype=np.float32)
             if self.x.flags.f_contiguous:
@@ -1930,17 +2028,17 @@ class projectorClass:
         from omegatomo.projector.projfunctions import conv3D
         return conv3D(self, f, ii)
         
-    def forwardProject(self, f, subset = -1):
+    def forwardProject(self, f, subset: int = -1, timestep: int = -1):
         if not(self.projectorInitialized):
             self.initProj()
         from omegatomo.projector.projfunctions import forwardProjection
-        return forwardProjection(self, f, subset)
+        return forwardProjection(self, f, subset, timestep)
         
-    def backwardProject(self, y, subset = -1):
+    def backwardProject(self, y, subset: int = -1, timestep: int = -1):
         if not(self.projectorInitialized):
             self.initProj()
         from omegatomo.projector.projfunctions import backwardProjection
-        return backwardProjection(self, y, subset)
+        return backwardProjection(self, y, subset, timestep)
     
     
     def T(self):
@@ -1967,7 +2065,7 @@ class projectorClass:
         return self
         
     class parameters(ctypes.Structure):
-        _pack_  = 1
+        #_pack_  = 1
         _fields_ = [
             ('use_raw_data', ctypes.c_uint8),
             ('listmode', ctypes.c_uint8),

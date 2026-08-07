@@ -273,6 +273,14 @@ def parseInputs(options, mDataFound = False):
     None.
 
     """
+    single_frame_list = (
+        options.Nt <= 1 and isinstance(options.SinM, list)
+    )
+    if single_frame_list:
+        options.SinM = options.SinM[0]
+        if isinstance(options.index, list):
+            options.index = options.index[0]
+
     if options.subsets > 1 and options.subsetType > 0:
         if mDataFound and not options.largeDim:
             if options.Nt > 1:
@@ -479,8 +487,14 @@ def parseInputs(options, mDataFound = False):
             
     
     if options.Nt <= 1 and mDataFound and not options.largeDim and options.loadTOF:
-        options.SinM = np.asfortranarray(options.SinM)
-        options.SinM = options.SinM.ravel(order='F').astype(dtype=np.float32)
+        if single_frame_list:
+            options.SinM = [np.asfortranarray(options.SinM).astype(dtype=np.float32)]
+            options.index = [options.index]
+        else:
+            options.SinM = np.asfortranarray(options.SinM)
+            options.SinM = options.SinM.ravel(order='F').astype(dtype=np.float32)
+    if single_frame_list and not isinstance(options.index, list):
+        options.index = [options.index]
 
 
 def TVPrepass(options):
