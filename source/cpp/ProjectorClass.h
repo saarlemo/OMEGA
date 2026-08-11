@@ -2173,7 +2173,7 @@ public:
 		kernelPSFf, kernelDiv, kernelMult, kernelForward, kernelSensList, kernelApu, kernelHyper, kernelRotate;
 	// Device buffers shared across backends
 	DEVBUFF_t d_xcenter, d_ycenter, d_zcenter, d_V, d_TOFCenter, d_eFOVIndices, d_weights, d_angle, d_g, d_uref, d_maskBPB, 
-		d_rayShiftsDetector, d_rayShiftsSource, d_maskPriorB;
+		d_rayShiftsDetector, d_rayShiftsSource, d_detectorVector, d_maskPriorB;
 	std::vector<DEVBUFF_t> d_attenB;
 	AFDEVBUFF_t d_output, d_meanBP, d_meanFP, d_inputB, d_W, d_gaussianNLM;
 	AFDEVBUFF_t d_qX, d_qY, d_qZ;
@@ -2376,6 +2376,7 @@ public:
 		if (memAlloc.rayShifts) {
 			getErrorString(cuMemFree(d_rayShiftsDetector));
 			getErrorString(cuMemFree(d_rayShiftsSource));
+			getErrorString(cuMemFree(d_detectorVector));
 		}
 		if (memAlloc.GGMRF) {
 			getErrorString(cuMemFree(d_weights));
@@ -3233,10 +3234,12 @@ public:
 			}
 			if (inputScalars.SPECT) {
 				ALLOC_BUFFER(d_rayShiftsDetector, CL_MEM_READ_ONLY, sizeof(float) * 2 * inputScalars.n_rays * inputScalars.nRowsD * 
-					inputScalars.nColsD * inputScalars.nProjections);
+					inputScalars.nColsD * inputScalars.nHeads);
 				CHECK(status, "\n", (STATUS_t)(-1));
 				ALLOC_BUFFER(d_rayShiftsSource, CL_MEM_READ_ONLY, sizeof(float) * 2 * inputScalars.n_rays * inputScalars.nRowsD * 
-					inputScalars.nColsD * inputScalars.nProjections);
+					inputScalars.nColsD * inputScalars.nHeads);
+				CHECK(status, "\n", (STATUS_t)(-1));
+				ALLOC_BUFFER(d_detectorVector, CL_MEM_READ_ONLY, sizeof(uint32_t) * inputScalars.nProjections);
 				CHECK(status, "\n", (STATUS_t)(-1));
 				memAlloc.rayShifts = true;
 			}
@@ -3500,14 +3503,16 @@ public:
 				memSize += (sizeof(float) * inputScalars.nBins);
 			}
 			if (inputScalars.SPECT) {
-				WRITE_BUFFER(d_rayShiftsDetector, sizeof(float) * 2 * inputScalars.n_rays * inputScalars.nRowsD * inputScalars.nColsD * 
-					inputScalars.nProjections, w_vec.rayShiftsDetector);
+				const size_t rayShiftSize = static_cast<size_t>(2) * inputScalars.n_rays * inputScalars.nRowsD * inputScalars.nColsD * inputScalars.nHeads;
+				WRITE_BUFFER(d_rayShiftsDetector, sizeof(float) * rayShiftSize, w_vec.rayShiftsDetector);
 				CHECK(status, "\n", (STATUS_t)(-1));
-				memSize += (sizeof(float) * 2 * inputScalars.n_rays * inputScalars.nRowsD * inputScalars.nColsD * inputScalars.nProjections);
-				WRITE_BUFFER(d_rayShiftsSource, sizeof(float) * 2 * inputScalars.n_rays * inputScalars.nRowsD * inputScalars.nColsD * 
-					inputScalars.nProjections, w_vec.rayShiftsSource);
+				memSize += sizeof(float) * rayShiftSize;
+				WRITE_BUFFER(d_rayShiftsSource, sizeof(float) * rayShiftSize, w_vec.rayShiftsSource);
 				CHECK(status, "\n", (STATUS_t)(-1));
-				memSize += (sizeof(float) * 2 * inputScalars.n_rays * inputScalars.nRowsD * inputScalars.nColsD * inputScalars.nProjections);
+				memSize += sizeof(float) * rayShiftSize;
+				WRITE_BUFFER(d_detectorVector, sizeof(uint32_t) * inputScalars.nProjections, w_vec.detectorVector);
+				CHECK(status, "\n", (STATUS_t)(-1));
+				memSize += sizeof(uint32_t) * inputScalars.nProjections;
 			}
 
 			if (DEBUG) {
@@ -3866,6 +3871,7 @@ public:
 			if (inputScalars.SPECT) {
 				KARG(FPArgs, kernelFP, kernelIndFP, d_rayShiftsDetector);
 				KARG(FPArgs, kernelFP, kernelIndFP, d_rayShiftsSource);
+				KARG(FPArgs, kernelFP, kernelIndFP, d_detectorVector);
 				KARG(FPArgs, kernelFP, kernelIndFP, inputScalars.coneOfResponseStdCoeffA);
 				KARG(FPArgs, kernelFP, kernelIndFP, inputScalars.coneOfResponseStdCoeffB);
 				KARG(FPArgs, kernelFP, kernelIndFP, inputScalars.coneOfResponseStdCoeffC);
@@ -3894,6 +3900,7 @@ public:
 			if (inputScalars.SPECT) {
 				KARG(BPArgs, kernelBP, kernelIndBP, d_rayShiftsDetector);
 				KARG(BPArgs, kernelBP, kernelIndBP, d_rayShiftsSource);
+				KARG(BPArgs, kernelBP, kernelIndBP, d_detectorVector);
 				KARG(BPArgs, kernelBP, kernelIndBP, inputScalars.coneOfResponseStdCoeffA);
 				KARG(BPArgs, kernelBP, kernelIndBP, inputScalars.coneOfResponseStdCoeffB);
 				KARG(BPArgs, kernelBP, kernelIndBP, inputScalars.coneOfResponseStdCoeffC);
@@ -4196,7 +4203,7 @@ public:
 #endif // END CUDA
 		// Per-launch copy of the work-group range: the 1D branch below has to flatten it, and local is a
 		// member shared with the backprojection and with the other, multidimensional launches here.
-		WorkRange localFP = local;
+		WORKRANGE_t localFP = local;
 		if (inputScalars.FPType == 5) {
 			SET_LAUNCH_RANGE3(global, inputScalars.nRowsD + erotus[0], (inputScalars.nColsD + NVOXELSFP - 1) / NVOXELSFP + erotus[1],
 				length[osa_iter + timestep * inputScalars.subsets], localFP);
@@ -4303,6 +4310,8 @@ public:
 				KARG_METAL_SLOT(kernelIndFPSubIter, 1);
 				KARG(kTemp, kernelFP, kernelIndFPSubIter, d_rayShiftsDetector);
 				KARG(kTemp, kernelFP, kernelIndFPSubIter, d_rayShiftsSource);
+				KARG_METAL_SLOT(kernelIndFPSubIter, 21);
+				KARG(kTemp, kernelFP, kernelIndFPSubIter, d_detectorVector);
 			}
 			if (inputScalars.TOF) {
 				KARG_METAL_SLOT(kernelIndFPSubIter, 3);
@@ -4693,7 +4702,7 @@ public:
 		}
 		encoder->setComputePipelineState(kernelBP.get());
 #endif // END METAL
-		WorkRange localBP = local;
+		WORKRANGE_t localBP = local;
 		TimerPoint tStart, tEnd;
 		if (DEBUG || inputScalars.verbose >= 3) {
 			INIT_TIMER(tStart, tEnd);
@@ -4706,6 +4715,8 @@ public:
 				KARG_METAL_SLOT(kernelIndBPSubIter, 1);
 				KARG(kTemp, kernelBP, kernelIndBPSubIter, d_rayShiftsDetector);
 				KARG(kTemp, kernelBP, kernelIndBPSubIter, d_rayShiftsSource);
+				KARG_METAL_SLOT(kernelIndBPSubIter, 21);
+				KARG(kTemp, kernelBP, kernelIndBPSubIter, d_detectorVector);
 			}
 			if (inputScalars.TOF) {
 				KARG_METAL_SLOT(kernelIndBPSubIter, 3);

@@ -1091,6 +1091,9 @@ end
 if ~isfield(options, 'rayShiftsSource')
     options.rayShiftsSource = [];
 end
+if ~isfield(options, 'nHeads') || isempty(options.nHeads)
+    options.nHeads = 1;
+end
 if ~isfield(options, 'iR')
     options.iR = 1;
 end

@@ -45,6 +45,7 @@ def transferData(options):
     options.param.randoms_correction = ctypes.c_uint32(options.randoms_correction)
     options.param.nColsD = ctypes.c_uint32(options.nColsD)
     options.param.nRowsD = ctypes.c_uint32(options.nRowsD)
+    options.param.nHeads = ctypes.c_uint32(options.nHeads)
     options.param.Nang = ctypes.c_uint32(options.Nang)
     options.param.Ndist = ctypes.c_uint32(options.Ndist)
     options.param.subsets = ctypes.c_uint32(options.subsets)
@@ -361,6 +362,7 @@ def transferData(options):
     #For SPECT...
     options.param.rayShiftsDetector = options.rayShiftsDetector.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
     options.param.rayShiftsSource = options.rayShiftsSource.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    options.param.detectorVector = options.DetectorVector.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32))
     options.param.coneOfResponseStdCoeffA = ctypes.c_float(options.coneOfResponseStdCoeffA)
     options.param.coneOfResponseStdCoeffB = ctypes.c_float(options.coneOfResponseStdCoeffB)
     options.param.coneOfResponseStdCoeffC = ctypes.c_float(options.coneOfResponseStdCoeffC)
@@ -723,4 +725,3 @@ def reconstructions_main(options):
             return output, FPOutput, residual
         else:
             return output, FPOutput
-        

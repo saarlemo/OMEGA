@@ -24,7 +24,7 @@ function options = SPECTParameters(options)
 if ismember(options.projector_type, [1, 11, 12, 2, 21, 22]) % Collimator modelling, ray tracing projectors
     if numel(options.rayShiftsDetector) == 0
         options.rayShiftsDetector = [0; 0];
-        options.rayShiftsDetector = repmat(options.rayShiftsDetector, [options.nRays, options.nRowsD, options.nColsD, options.nProjections]);
+        options.rayShiftsDetector = repmat(options.rayShiftsDetector, [options.nRays, options.nRowsD, options.nColsD, options.nHeads]);
 
         if options.colFxy == 0 && options.colFz == 0 % Pinhole collimator
             dx = linspace(-(options.nRowsD/2-0.5)*options.dPitchX, (options.nRowsD/2-0.5)*options.dPitchX, options.nRowsD);
@@ -42,7 +42,7 @@ if ismember(options.projector_type, [1, 11, 12, 2, 21, 22]) % Collimator modelli
     end
     if numel(options.rayShiftsSource) == 0
         options.rayShiftsSource = [0; 0];
-        options.rayShiftsSource = repmat(options.rayShiftsSource, [options.nRays, options.nRowsD, options.nColsD, options.nProjections]);
+        options.rayShiftsSource = repmat(options.rayShiftsSource, [options.nRays, options.nRowsD, options.nColsD, options.nHeads]);
 
         if options.nRays > 1 % Multiray shifts
             nRays = sqrt(options.nRays);

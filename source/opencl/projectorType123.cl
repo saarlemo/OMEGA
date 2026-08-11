@@ -147,6 +147,9 @@ void projectorType123(
 #else
 	CLGLOBAL float* d_output [[buffer(20)]],
 #endif
+#if defined(SPECT)
+	const CLGLOBAL uint* d_detectorVector [[buffer(21)]],
+#endif
 	uint3 temp_i [[thread_position_in_grid]]   // global id
 
 #else /////////////////////// OPENCL/CUDA ///////////////////////
@@ -158,6 +161,7 @@ void projectorType123(
 #if defined(SPECT)
 	const CLGLOBAL float* CLRESTRICT d_rayShiftsDetector,
 	const CLGLOBAL float* CLRESTRICT d_rayShiftsSource,
+	const CLGLOBAL uint* CLRESTRICT d_detectorVector,
     const float coneOfResponseStdCoeffA,
     const float coneOfResponseStdCoeffB,
     const float coneOfResponseStdCoeffC,
@@ -432,7 +436,7 @@ void projectorType123(
 #if defined(CT) && !defined(LISTMODE) && !defined(PET) // CT data
 	getDetectorCoordinatesCT(d_xy, d_z, &s, &d, i, d_size_x, d_sizey, crystalSize);
 #elif defined(SPECT) && (!defined(LISTMODE) || defined(SENS)) && !defined(PET) // SPECT data
-	getDetectorCoordinatesSPECT(d_xy, d_z, &s, &d, i, d_size_x, d_sizey, crystalSize, d_rayShiftsDetector, d_rayShiftsSource, lorXY, idx, totalFOVmin, totalFOVmax);
+	getDetectorCoordinatesSPECT(d_xy, d_z, &s, &d, i, d_size_x, d_sizey, crystalSize, d_rayShiftsDetector, d_rayShiftsSource, d_detectorVector, lorXY, totalFOVmin, totalFOVmax);
 #elif defined(LISTMODE) && !defined(SENS) // Listmode data
 #if defined(INDEXBASED)
 	getDetectorCoordinatesListmode(d_xy, d_z, trIndex, axIndex, &s, &d, idx

@@ -26,6 +26,43 @@ function options = OMEGA_error_check(options)
 options = setMissingValues(options);
 options = convertOptions(options);
 
+% SPECT collimator ray shifts are stored once per detector head and detector
+% element.
+if options.SPECT
+    if ~isfield(options, 'DetectorVector') || isempty(options.DetectorVector)
+        options.DetectorVector = zeros(options.nProjections, 1, 'uint32');
+    elseif numel(options.DetectorVector) ~= options.nProjections
+        error(['DetectorVector must contain one detector-head index for each projection (' ...
+            num2str(options.nProjections) ' values required).'])
+    else
+        options.DetectorVector = uint32(options.DetectorVector(:));
+    end
+
+    if ismember(options.projector_type, [1, 11, 12, 2, 21, 22])
+        if isfield(options, 'nHeads') && ~isempty(options.nHeads)
+            nHeads = double(options.nHeads);
+        else
+            nHeads = 1;
+        end
+        compactRayShiftSize = 2 * double(options.nRays) * double(options.nRowsD) * ...
+            double(options.nColsD) * nHeads;
+
+        detectorSize = numel(options.rayShiftsDetector);
+        sourceSize = numel(options.rayShiftsSource);
+        if detectorSize > 0 && detectorSize ~= compactRayShiftSize
+            error(['rayShiftsDetector has an invalid size. Expected compact size ' ...
+                num2str(compactRayShiftSize) ', got ' num2str(detectorSize) '.'])
+        end
+        if sourceSize > 0 && sourceSize ~= compactRayShiftSize
+            error(['rayShiftsSource has an invalid size. Expected compact size ' ...
+                num2str(compactRayShiftSize) ', got ' num2str(sourceSize) '.'])
+        end
+        if detectorSize > 0 && sourceSize > 0 && detectorSize ~= sourceSize
+            error('rayShiftsDetector and rayShiftsSource must have the same compact size.')
+        end
+    end
+end
+
 if ismac && options.use_64bit_atomics
     warning(['The current Metal compiler does not expose native atomic_ulong ' ...
         'addition. Disabling 64-bit atomics; use 32-bit atomics for older Metal hardware.'])

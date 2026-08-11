@@ -33,6 +33,8 @@ struct inputStruct {
     uint32_t nColsD;
     // Number of rows in the projection image/sinogram
     uint32_t nRowsD;
+    // Number of SPECT detector heads
+    uint32_t nHeads = 1;
     // Number of angular samples in the sinogram
     uint32_t Nang;
     // Number of radial distances in the sinogram
@@ -518,6 +520,7 @@ struct inputStruct {
     // SPECT values
     float* rayShiftsDetector;
     float* rayShiftsSource;
+    uint32_t* detectorVector;
     float coneOfResponseStdCoeffA;
     float coneOfResponseStdCoeffB;
     float coneOfResponseStdCoeffC;
@@ -656,6 +659,7 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
 
     // The size of the first dimension in the input sinogram/projection
     inputScalars.nRowsD = options.nRowsD;
+    inputScalars.nHeads = options.nHeads;
 
     inputScalars.verbose = options.verbose;
 
@@ -968,6 +972,7 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
 		if (inputScalars.projector_type == 1 || inputScalars.projector_type == 2 || inputScalars.projector_type == 22 || inputScalars.projector_type == 11) {
 			w_vec.rayShiftsDetector = options.rayShiftsDetector;
 			w_vec.rayShiftsSource = options.rayShiftsSource;
+			w_vec.detectorVector = options.detectorVector;
 		}
     } else {
         w_vec.nProjections = options.nProjections;

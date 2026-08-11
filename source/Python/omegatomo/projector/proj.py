@@ -486,6 +486,7 @@ class projectorClass:
     flipImageZ = False
     rayShiftsDetector: npt.NDArray[np.float32] = np.empty(0, dtype=np.float32)
     rayShiftsSource: npt.NDArray[np.float32] = np.empty(0, dtype=np.float32)
+    DetectorVector: npt.NDArray[np.uint32] = np.empty(0, dtype=np.uint32)
     CORtoDetectorSurface: float = 0 # Detector swivel radius
     swivelAngles: npt.NDArray[np.float32] = np.empty(0, dtype = np.float32)
     coneOfResponseStdCoeffA = -1
@@ -1165,6 +1166,25 @@ class projectorClass:
         
         
     def OMEGAErrorCheck(self):
+        if self.SPECT:
+            if not hasattr(self, 'DetectorVector') or self.DetectorVector is None or np.size(self.DetectorVector) == 0:
+                self.DetectorVector = np.zeros(int(self.nProjections), dtype=np.uint32)
+            else:
+                self.DetectorVector = np.ascontiguousarray(np.asarray(self.DetectorVector, dtype=np.uint32).reshape(-1))
+                if self.DetectorVector.size != int(self.nProjections):
+                    raise ValueError(f'DetectorVector must contain one detector-head index for each projection ({self.nProjections} values required).')
+
+            if self.projector_type in [1, 11, 12, 2, 21, 22]:
+                compact_ray_shift_size = 2 * int(self.nRays) * int(self.nRowsD) * int(self.nColsD) * int(self.nHeads)
+                detector_size = int(np.size(self.rayShiftsDetector))
+                source_size = int(np.size(self.rayShiftsSource))
+                if detector_size > 0 and detector_size != compact_ray_shift_size:
+                    raise ValueError(f'rayShiftsDetector has an invalid size. Expected compact size {compact_ray_shift_size}, got {detector_size}.')
+                if source_size > 0 and source_size != compact_ray_shift_size:
+                    raise ValueError(f'rayShiftsSource has an invalid size. Expected compact size {compact_ray_shift_size}, got {source_size}.')
+                if detector_size > 0 and source_size > 0 and detector_size != source_size:
+                    raise ValueError('rayShiftsDetector and rayShiftsSource must have the same compact size.')
+
         if self.FOVa_x > 0 and self.FOVa_y == 0:
             self.FOVa_y = self.FOVa_x
         if not self.CT and not self.SPECT and (self.FOVa_x >= self.diameter or self.FOVa_y >= self.diameter) and self.diameter > 0:
@@ -2079,6 +2099,7 @@ class projectorClass:
             ('randoms_correction', ctypes.c_uint32),
             ('nColsD', ctypes.c_uint32),
             ('nRowsD', ctypes.c_uint32),
+            ('nHeads', ctypes.c_uint32),
             ('Nang', ctypes.c_uint32),
             ('Ndist', ctypes.c_uint32),
             ('subsets', ctypes.c_uint32),
@@ -2376,6 +2397,7 @@ class projectorClass:
             ('axIndices', ctypes.POINTER(ctypes.c_uint16)),
             ('rayShiftsDetector',ctypes.POINTER(ctypes.c_float)),
             ('rayShiftsSource',ctypes.POINTER(ctypes.c_float)),
+            ('detectorVector',ctypes.POINTER(ctypes.c_uint32)),
             ('coneOfResponseStdCoeffA',ctypes.c_float),
             ('coneOfResponseStdCoeffB',ctypes.c_float),
             ('coneOfResponseStdCoeffC',ctypes.c_float),

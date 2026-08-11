@@ -189,6 +189,7 @@ inline void loadInput(scalarStruct& inputScalars, const mxArray* options, const 
 	} else if (inputScalars.SPECT) {
 		inputScalars.nColsD = getScalarUInt32(getField(options, 0, "nColsD"));
 		inputScalars.nRowsD = getScalarUInt32(getField(options, 0, "nRowsD"));
+		inputScalars.nHeads = getScalarUInt32(getField(options, 0, "nHeads"));
         if (inputScalars.FPType == 1 || inputScalars.FPType == 2 || inputScalars.BPType == 1 || inputScalars.BPType == 2) {
             inputScalars.coneOfResponseStdCoeffA = getScalarFloat(getField(options, 0, "coneOfResponseStdCoeffA"));
             inputScalars.coneOfResponseStdCoeffB = getScalarFloat(getField(options, 0, "coneOfResponseStdCoeffB"));
@@ -285,6 +286,7 @@ inline void form_data_variables(Weighting& w_vec, const mxArray* options, scalar
 		if (inputScalars.FPType == 1 || inputScalars.FPType == 2 || inputScalars.BPType == 1 || inputScalars.BPType == 2) {
 			w_vec.rayShiftsDetector = getSingles(options, "rayShiftsDetector");
 			w_vec.rayShiftsSource = getSingles(options, "rayShiftsSource");
+			w_vec.detectorVector = getUint32s(options, "DetectorVector");
 		}
 	} else {
 		w_vec.nProjections = getScalarInt64(getField(options, 0, "nProjections"));

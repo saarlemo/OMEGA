@@ -898,7 +898,7 @@ def sinogramCoordinates3D(options, layers = (1,1)):
 def SPECTParameters(options: proj.projectorClass):
     if options.projector_type in [1, 11, 12, 2, 21, 22]: # Ray tracing projectors
         if options.rayShiftsDetector.size == 0: # Collimator modeling
-            options.rayShiftsDetector = np.zeros((2*options.nRays, options.nRowsD, options.nColsD, options.nProjections), dtype=np.float32)
+            options.rayShiftsDetector = np.zeros((2*options.nRays, options.nRowsD, options.nColsD, options.nHeads), dtype=np.float32)
             
             if options.colFxy == 0 and options.colFz == 0:
                 dx = np.linspace(-(options.nRowsD / 2 - 0.5) * options.dPitchX, (options.nRowsD / 2 - 0.5) * options.dPitchX, options.nRowsD)
@@ -911,7 +911,7 @@ def SPECTParameters(options: proj.projectorClass):
                             options.rayShiftsDetector[2 * kk + 1, ii, jj, :] = -dy[jj]    
 
         if options.rayShiftsSource.size == 0:
-            options.rayShiftsSource = np.zeros((2*options.nRays, options.nRowsD, options.nColsD, options.nProjections), dtype=np.float32)
+            options.rayShiftsSource = np.zeros((2*options.nRays, options.nRowsD, options.nColsD, options.nHeads), dtype=np.float32)
             
             if options.nRays > 1: # Multiray shifts
                 nRays = int(np.sqrt(options.nRays))
@@ -929,6 +929,7 @@ def SPECTParameters(options: proj.projectorClass):
                     options.rayShiftsSource[2 * kk, :, :, :] = tmp_shift[2 * kk]
                     options.rayShiftsSource[2 * kk + 1, :, :, :] = tmp_shift[2 * kk + 1]
             
+        options.rayShiftsDetector = options.rayShiftsDetector.ravel('F')
         options.rayShiftsSource = options.rayShiftsSource.ravel('F')
 
     if options.projector_type in [12, 21, 2, 22]: # Orthogonal distance ray tracer

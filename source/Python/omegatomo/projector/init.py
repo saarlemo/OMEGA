@@ -434,7 +434,7 @@ def initProjector(self):
             bOpt += ('-DINDEXBASED',)
         if self.listmode > 0 and ~self.useIndexBasedReconstruction and not vendor == 'NVIDIA Corporation':
             bOpt += ('-DUSEGLOBAL',)
-        else:
+        elif not self.useMetal:
             bOpt += ('-DUSEGLOBAL',)
         if (((self.FPType == 1 or self.BPType == 1 or self.FPType == 4 or self.BPType == 4) and self.n_rays_transaxial * self.n_rays_axial > 1) or self.SPECT):
             bOpt += ('-DN_RAYS=' + str(self.n_rays_transaxial * self.n_rays_axial),)
@@ -647,6 +647,7 @@ def initProjector(self):
                 if self.SPECT:
                     self.d_rayShiftsDetector = cp.asarray(self.rayShiftsDetector)
                     self.d_rayShiftsSource = cp.asarray(self.rayShiftsSource)
+                    self.d_detectorVector = cp.asarray(np.asarray(self.DetectorVector, dtype=np.uint32))
                 if (self.BPType == 2 or self.BPType == 3 or self.FPType == 2 or self.FPType == 3):
                     self.d_V = cp.asarray(self.V)
                 if (self.normalization_correction):
@@ -705,7 +706,7 @@ def initProjector(self):
                 if self.FPType in [1, 2, 3]:
                     self.kIndF = (cp.float32(self.global_factor), cp.float32(self.epps), cp.uint32(self.nRowsD), cp.uint32(self.det_per_ring), cp.float32(self.sigma_x),)
                     if self.SPECT:
-                        self.kIndF += (self.d_rayShiftsDetector, self.d_rayShiftsSource, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.totalFOVxmin), cp.float32(self.totalFOVymin), cp.float32(self.totalFOVzmin), cp.float32(self.totalFOVxmax), cp.float32(self.totalFOVymax), cp.float32(self.totalFOVzmax),)
+                        self.kIndF += (self.d_rayShiftsDetector, self.d_rayShiftsSource, self.d_detectorVector, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.totalFOVxmin), cp.float32(self.totalFOVymin), cp.float32(self.totalFOVzmin), cp.float32(self.totalFOVxmax), cp.float32(self.totalFOVymax), cp.float32(self.totalFOVzmax),)
                     self.kIndF += (cp.float32(self.dPitchX),cp.float32(self.dPitchY),)
                 elif self.FPType == 4:
                     self.kIndF = (cp.uint32(self.nRowsD), cp.uint32(self.nColsD), cp.float32(self.dPitchX),cp.float32(self.dPitchY),cp.float32(self.dL),cp.float32(self.global_factor),)
@@ -740,7 +741,7 @@ def initProjector(self):
                 if self.BPType in [1, 2, 3]:
                     self.kIndB = (cp.float32(self.global_factor), cp.float32(self.epps), cp.uint32(self.nRowsD), cp.uint32(self.det_per_ring), cp.float32(self.sigma_x),)
                     if self.SPECT:
-                        self.kIndB += (self.d_rayShiftsDetector, self.d_rayShiftsSource, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.totalFOVxmin), cp.float32(self.totalFOVymin), cp.float32(self.totalFOVzmin), cp.float32(self.totalFOVxmax), cp.float32(self.totalFOVymax), cp.float32(self.totalFOVzmax),)
+                        self.kIndB += (self.d_rayShiftsDetector, self.d_rayShiftsSource, self.d_detectorVector, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.totalFOVxmin), cp.float32(self.totalFOVymin), cp.float32(self.totalFOVzmin), cp.float32(self.totalFOVxmax), cp.float32(self.totalFOVymax), cp.float32(self.totalFOVzmax),)
                     self.kIndB += (cp.float32(self.dPitchX),cp.float32(self.dPitchY),)
                     if self.BPType in [2, 3]:
                         if self.BPType == 2:
@@ -834,6 +835,7 @@ def initProjector(self):
             if self.SPECT:
                 self.d_rayShiftsDetector = cl.array.to_device(self.queue, self.rayShiftsDetector)
                 self.d_rayShiftsSource = cl.array.to_device(self.queue, self.rayShiftsSource)
+                self.d_detectorVector = cl.array.to_device(self.queue, np.asarray(self.DetectorVector, dtype=np.uint32))
             if self.useMaskFP:
                 imformat = cl.ImageFormat(cl.channel_order.A, cl.channel_type.UNSIGNED_INT8)
                 if self.maskFPZ > 1:
@@ -949,6 +951,8 @@ def initProjector(self):
                     self.kIndF += 1
                     self.knlF.set_arg(self.kIndF, self.d_rayShiftsSource.data)
                     self.kIndF += 1
+                    self.knlF.set_arg(self.kIndF, self.d_detectorVector.data)
+                    self.kIndF += 1
                     self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.coneOfResponseStdCoeffA))
                     self.kIndF += 1
                     self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.coneOfResponseStdCoeffB))
@@ -1036,6 +1040,8 @@ def initProjector(self):
                     self.knlB.set_arg(self.kIndB, self.d_rayShiftsDetector.data)
                     self.kIndB += 1
                     self.knlB.set_arg(self.kIndB, self.d_rayShiftsSource.data)
+                    self.kIndB += 1
+                    self.knlB.set_arg(self.kIndB, self.d_detectorVector.data)
                     self.kIndB += 1
                     self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.coneOfResponseStdCoeffA))
                     self.kIndB += 1
