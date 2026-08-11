@@ -6,7 +6,7 @@
 * Implementation 3 remains OpenCL-only; implementation 5 uses the shared backend
 * compatibility layer for OpenCL, CUDA and Metal.
 *
-* Copyright(C) 2020-2025 Ville-Veikko Wettenhovi, Niilo Saarlemo
+* Copyright(C) 2020-2026 Ville-Veikko Wettenhovi, Niilo Saarlemo
 *
 * This program is free software : you can redistribute it and/or modify
 * it under the terms of the GNU General Public License as published by
@@ -32,7 +32,8 @@ inline void reconstruction_multigpu(const float* z_det, const float* x, scalarSt
 	const uint16_t* z_index = nullptr, const uint16_t* L = nullptr) {
 
 	const C tyyppi = (C)0;
-	std::vector<int64_t> length(inputScalars.subsetsUsed); // Number of measurements in each subset
+	const size_t nLength = static_cast<size_t>(inputScalars.subsets) * static_cast<size_t>(inputScalars.Nt);
+	std::vector<int64_t> length(nLength); // Number of measurements in each subset
 
 	if (DEBUG) {
 		mexPrintBase("inputScalars.subsets = %u\n", inputScalars.subsets);
@@ -41,9 +42,11 @@ inline void reconstruction_multigpu(const float* z_det, const float* x, scalarSt
 		mexEval();
 	}
 
-	for (uint32_t kk = 0; kk < inputScalars.subsetsUsed; kk++)
+	for (size_t kk = 0; kk < nLength; kk++)
 		length[kk] = pituus[kk + 1u] - pituus[kk];
-	uint64_t m_size = length[inputScalars.osa_iter0];
+	// Index of the single subset/timestep pair this call processes
+	const size_t indD0 = static_cast<size_t>(inputScalars.osa_iter0) + static_cast<size_t>(inputScalars.timestep0) * static_cast<size_t>(inputScalars.subsets);
+	uint64_t m_size = length[indD0];
 	if (DEBUG) mexPrint("Adding projector");
 	STATUS_t status = SUCCESS_VALUE;
 
@@ -54,8 +57,56 @@ inline void reconstruction_multigpu(const float* z_det, const float* x, scalarSt
 		return;
 	proj.no_norm = no_norm;
 
+	// Check for correct sizes before writing the buffers
+	{
+		const size_t vecSize = ((inputScalars.PET || inputScalars.CT || inputScalars.SPECT) && inputScalars.listmode == 0)
+			? static_cast<size_t>(inputScalars.nRowsD) * static_cast<size_t>(inputScalars.nColsD) : 1ULL;
+		const size_t lastMeas = static_cast<size_t>(pituus[inputScalars.subsetsUsed]) * vecSize;
+		bool bad = false;
+		auto checkSize = [&](const char* name, const size_t have, const size_t need) {
+			if (have < need) {
+				mexPrintBase("%s: host array has %llu elements but ", name, static_cast<unsigned long long>(have));
+				mexPrintBase("%llu are required\n", static_cast<unsigned long long>(need));
+				mexEval();
+				bad = true;
+			}
+		};
+		if (inputScalars.maskFP)
+			checkSize("maskFP", inputScalars.size_maskFP, static_cast<size_t>(inputScalars.nRowsD) * static_cast<size_t>(inputScalars.nColsD) *
+				(inputScalars.maskFPZ > 1 ? static_cast<size_t>(inputScalars.maskFPZ) : 1ULL));
+		if (inputScalars.maskBP)
+			checkSize("maskBP", inputScalars.size_maskBP, static_cast<size_t>(inputScalars.Nx[0]) * static_cast<size_t>(inputScalars.Ny[0]) *
+				static_cast<size_t>(inputScalars.maskBPZ));
+		if (inputScalars.normalization_correction && inputScalars.size_norm > 1ULL)
+			checkSize("normalization", inputScalars.size_norm, lastMeas);
+		if (inputScalars.attenuation_correction) {
+			if (inputScalars.CTAttenuation)
+				checkSize("attenuation image", inputScalars.size_atten, static_cast<size_t>(inputScalars.im_dim[0]));
+			else
+				checkSize("attenuation", inputScalars.size_atten, lastMeas);
+		}
+		// Check "measurement" size when needed (backprojection and implementation 3)
+		// BDD uses integral image and thus requires a separate one
+		if (type == 2) {
+			const size_t needMeas = inputScalars.BPType == 5
+				? static_cast<size_t>(inputScalars.nRowsD + 1) * static_cast<size_t>(inputScalars.nColsD + 1) * static_cast<size_t>(length[indD0])
+				: static_cast<size_t>(length[indD0]) * vecSize * static_cast<size_t>(inputScalars.nBins);
+			checkSize("measurements", inputScalars.size_meas, needMeas);
+		}
+		else if (type == 0) {
+			size_t needMeas = 0ULL;
+			for (uint32_t kk = inputScalars.osa_iter0; kk < inputScalars.subsetsUsed; kk++)
+				needMeas += static_cast<size_t>(length[kk]) * vecSize * static_cast<size_t>(inputScalars.nBins);
+			checkSize("measurements", inputScalars.size_meas, needMeas);
+		}
+		if (bad) {
+			mexPrint("Aborting: one or more inputs are smaller than the reconstruction geometry requires");
+			return;
+		}
+	}
+
 	// Create OpenCL buffers, CUDA arrays or OneAPI buffers (in the future)
-	status = (STATUS_t)proj.createBuffers(inputScalars, w_vec, x, z_det, xy_index, z_index, L, pituus, atten, norm, extraCorr, length, MethodList, type);	
+	status = proj.createBuffers(inputScalars, w_vec, x, z_det, xy_index, z_index, L, pituus, atten, norm, extraCorr, length, MethodList, type);
 	if (status != 0)
 		return;
 
@@ -70,7 +121,7 @@ inline void reconstruction_multigpu(const float* z_det, const float* x, scalarSt
 	int64_t imTot = 0ULL;
 
 	if ((inputScalars.CT || inputScalars.SPECT || inputScalars.PET) && inputScalars.listmode == 0)
-		m_size = static_cast<uint64_t>(inputScalars.nRowsD) * static_cast<uint64_t>(inputScalars.nColsD) * length[inputScalars.osa_iter0];
+		m_size = static_cast<uint64_t>(inputScalars.nRowsD) * static_cast<uint64_t>(inputScalars.nColsD) * length[indD0];
 
 	// type 0 = Implementation 3
 	// type 1 = Implementation 5 forward projection
@@ -100,7 +151,7 @@ inline void reconstruction_multigpu(const float* z_det, const float* x, scalarSt
 			mexEval();
 		}
 		if (inputScalars.BPType == 5)
-			proj.d_output = proj.makeDeviceBuffer(sizeof(float) * static_cast<uint64_t>(inputScalars.nRowsD + 1) * static_cast<uint64_t>(inputScalars.nColsD + 1) * length[inputScalars.osa_iter0], BACKEND_BUFFER_READ_ONLY, status);
+			proj.d_output = proj.makeDeviceBuffer(sizeof(float) * static_cast<uint64_t>(inputScalars.nRowsD + 1) * static_cast<uint64_t>(inputScalars.nColsD + 1) * length[indD0], BACKEND_BUFFER_READ_ONLY, status);
 		else
 			proj.d_output = proj.makeDeviceBuffer(sizeof(float) * m_size * inputScalars.nBins, BACKEND_BUFFER_READ_ONLY, status);
 		CHECK(status, "\n", );
@@ -129,7 +180,7 @@ inline void reconstruction_multigpu(const float* z_det, const float* x, scalarSt
 
 		}
 		if (inputScalars.BPType == 5)
-			status = proj.writeDeviceBuffer(proj.d_output, meas, sizeof(float) * static_cast<uint64_t>(inputScalars.nRowsD + 1) * static_cast<uint64_t>(inputScalars.nColsD + 1) * length[inputScalars.osa_iter0]);
+			status = proj.writeDeviceBuffer(proj.d_output, meas, sizeof(float) * static_cast<uint64_t>(inputScalars.nRowsD + 1) * static_cast<uint64_t>(inputScalars.nColsD + 1) * length[indD0]);
 		else
 			status = proj.writeDeviceBuffer(proj.d_output, meas, sizeof(float) * m_size * inputScalars.nBins);
 		CHECK(status, "\n", );
@@ -196,9 +247,11 @@ inline void reconstruction_multigpu(const float* z_det, const float* x, scalarSt
 	for (uint32_t iter = 0; iter < inputScalars.Niter; iter++) {
 		for (uint32_t osa_iter = inputScalars.osa_iter0; osa_iter < inputScalars.subsetsUsed; osa_iter++) {
             for (uint32_t timestep = inputScalars.timestep0; timestep < inputScalars.timestepsUsed; timestep++) {
-                m_size = length[osa_iter];
+                // Same [osa_iter + timestep * subsets] convention ProjectorClass uses internally
+                const size_t indD = static_cast<size_t>(osa_iter) + static_cast<size_t>(timestep) * static_cast<size_t>(inputScalars.subsets);
+                m_size = length[indD];
                 if ((inputScalars.CT || inputScalars.SPECT || inputScalars.PET) && inputScalars.listmode == 0)
-                    m_size = static_cast<uint64_t>(inputScalars.nRowsD) * static_cast<uint64_t>(inputScalars.nColsD) * length[osa_iter];
+                    m_size = static_cast<uint64_t>(inputScalars.nRowsD) * static_cast<uint64_t>(inputScalars.nColsD) * length[indD];
 #if defined(OPENCL)
                 if (type == 0) {
                     proj.d_output = proj.makeDeviceBuffer(sizeof(float) * m_size * inputScalars.nBins, BACKEND_BUFFER_READ_WRITE, status);
