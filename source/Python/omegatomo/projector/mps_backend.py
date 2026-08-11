@@ -1,20 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Native PyTorch-MPS bridge for OMEGA projectorType123 Metal kernels.
-
-This first implementation intentionally targets the SPECT configuration used by
-SPECT_main_DIP_PyTorch_MPS.py:
-
-* projector types 1--3 (projectorType123)
-* float32 buffers, no integer accumulator conversion
-* listmode disabled
-* useImages disabled
-* no attenuation, normalization, scatter/additional corrections, masks or TOF
-* one reconstructed volume
-
-The forward and backward Metal pipelines are compiled once during projector
-initialization because the same entry point is specialized with different FP/BP
-macros and the active OMEGA user settings.
-"""
+"""Native PyTorch-MPS bridge for OMEGA projector kernels."""
 
 from __future__ import annotations
 
@@ -22,15 +7,13 @@ import hashlib
 import os
 import re
 import shlex
-from pathlib import Path
 import struct
+from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
 
 
-# Metal/C++ SIMD layout for kernelParams.hpp::ScalarKernelParams.
-# float3/int3/uint3 occupy and align to 16 bytes in MSL and simd:: types.
 SCALAR_KERNEL_PARAMS_SIZE = 336
 
 _OFFSETS = {
@@ -80,244 +63,147 @@ _OFFSETS = {
 }
 
 
-def _scalar(value: Any, default: float = 0.0) -> float:
-    if value is None:
-        return float(default)
-    arr = np.asarray(value)
-    if arr.size == 0:
-        return float(default)
-    return float(arr.reshape(-1)[0])
-
-
-def _indexed_scalar(obj: Any, name: str, index: int, default: float = 0.0) -> float:
-    value = getattr(obj, name, None)
-    if value is None:
-        return float(default)
-    arr = np.asarray(value)
-    if arr.size == 0:
-        return float(default)
-    flat = arr.reshape(-1)
-    if flat.size == 1:
-        return float(flat[0])
-    if index >= flat.size:
-        return float(default)
-    return float(flat[index])
-
-
-def _int_scalar(value: Any, default: int = 0) -> int:
-    if value is None:
-        return int(default)
-    arr = np.asarray(value)
-    if arr.size == 0:
-        return int(default)
-    return int(arr.reshape(-1)[0])
-
-
-def _indexed_int(obj: Any, name: str, index: int, default: int = 0) -> int:
-    value = getattr(obj, name, None)
-    if value is None:
-        return int(default)
-    arr = np.asarray(value)
-    if arr.size == 0:
-        return int(default)
-    flat = arr.reshape(-1)
-    if flat.size == 1:
-        return int(flat[0])
-    if index >= flat.size:
-        return int(default)
-    return int(flat[index])
-
-
-def _frame_subset_int(self: Any, name: str, timestep: int, subset: int, default: int = 0) -> int:
-    value = getattr(self, name, None)
-    if value is None:
-        return int(default)
-    arr = np.asarray(value)
-    if arr.size == 0:
-        return int(default)
-    if arr.ndim >= 2:
-        return int(arr[timestep, subset])
-    frame_count = int(getattr(self, 'Nt', 1))
-    subset_count = int(getattr(self, 'subsets', 1))
-    if arr.size == frame_count * subset_count:
-        return int(arr.reshape(frame_count, subset_count)[timestep, subset])
-    return int(arr[subset])
+def _empty_value(value: Any) -> bool:
+    try:
+        return np.asarray(value).size == 0
+    except Exception:
+        return value is None
 
 
 def _pack_scalar_kernel_params(self: Any, timestep: int, subset: int, volume: int) -> bytes:
-    """Pack ScalarKernelParams using the ABI in kernelParams.hpp.
-
-    Add a host-side static_assert(sizeof(ScalarKernelParams) == 336) to the
-    existing Metal backend when integrating this patch permanently.
-    """
-
     blob = bytearray(SCALAR_KERNEL_PARAMS_SIZE)
 
     def u32(name: str, value: int) -> None:
-        struct.pack_into("<I", blob, _OFFSETS[name], int(value))
+        struct.pack_into('<I', blob, _OFFSETS[name], int(value))
 
     def i32(name: str, value: int) -> None:
-        struct.pack_into("<i", blob, _OFFSETS[name], int(value))
+        struct.pack_into('<i', blob, _OFFSETS[name], int(value))
 
     def i64(name: str, value: int) -> None:
-        struct.pack_into("<q", blob, _OFFSETS[name], int(value))
+        struct.pack_into('<q', blob, _OFFSETS[name], int(value))
 
     def u64(name: str, value: int) -> None:
-        struct.pack_into("<Q", blob, _OFFSETS[name], int(value))
+        struct.pack_into('<Q', blob, _OFFSETS[name], int(value))
 
     def u8(name: str, value: int) -> None:
-        struct.pack_into("<B", blob, _OFFSETS[name], int(value))
+        struct.pack_into('<B', blob, _OFFSETS[name], int(value))
 
     def f32(name: str, value: float) -> None:
-        struct.pack_into("<f", blob, _OFFSETS[name], float(value))
+        struct.pack_into('<f', blob, _OFFSETS[name], float(value))
 
     def f2(name: str, values: Iterable[float]) -> None:
         a, b = values
-        struct.pack_into("<2f", blob, _OFFSETS[name], float(a), float(b))
+        struct.pack_into('<2f', blob, _OFFSETS[name], float(a), float(b))
 
     def f3(name: str, values: Iterable[float]) -> None:
         a, b, c = values
-        # The fourth float is ABI padding for Metal simd::float3/float3.
-        struct.pack_into("<4f", blob, _OFFSETS[name], float(a), float(b), float(c), 0.0)
+        struct.pack_into('<4f', blob, _OFFSETS[name], float(a), float(b), float(c), 0.0)
 
     def u3(name: str, values: Iterable[int]) -> None:
         a, b, c = values
-        struct.pack_into("<4I", blob, _OFFSETS[name], int(a), int(b), int(c), 0)
+        struct.pack_into('<4I', blob, _OFFSETS[name], int(a), int(b), int(c), 0)
 
     def i3(name: str, values: Iterable[int]) -> None:
         a, b, c = values
-        struct.pack_into("<4i", blob, _OFFSETS[name], int(a), int(b), int(c), 0)
+        struct.pack_into('<4i', blob, _OFFSETS[name], int(a), int(b), int(c), 0)
 
-    nx = _indexed_int(self, "Nx", volume, 1)
-    ny = _indexed_int(self, "Ny", volume, 1)
-    nz = _indexed_int(self, "Nz", volume, 1)
-    dx = _indexed_scalar(self, "dx", volume, 1.0)
-    dy = _indexed_scalar(self, "dy", volume, 1.0)
-    dz = _indexed_scalar(self, "dz", volume, 1.0)
-    bx = _indexed_scalar(self, "bx", volume, 0.0)
-    by = _indexed_scalar(self, "by", volume, 0.0)
-    bz = _indexed_scalar(self, "bz", volume, 0.0)
+    nx = self.Nx[volume]
+    ny = self.Ny[volume]
+    nz = self.Nz[volume]
+    dx = self.dx[volume]
+    dy = self.dy[volume]
+    dz = self.dz[volume]
+    bx = self.bx[volume]
+    by = self.by[volume]
+    bz = self.bz[volume]
 
-    u32("nRowsD", _int_scalar(self.nRowsD))
-    u32("nColsD", _int_scalar(self.nColsD))
-    f2("dPitch", (_scalar(self.dPitchX), _scalar(self.dPitchY)))
-    f32("dL", _scalar(getattr(self, "dL", 0.0)))
-    f32("global_factor", _scalar(getattr(self, "global_factor", 1.0), 1.0))
-    f32("epps", _scalar(getattr(self, "epps", 1e-5), 1e-5))
-    u32("det_per_ring", _int_scalar(getattr(self, "det_per_ring", 0)))
-    f32("sigma_x", _scalar(getattr(self, "sigma_x", 0.0)))
-    f32("coneOfResponseStdCoeffA", _scalar(getattr(self, "coneOfResponseStdCoeffA", 0.0)))
-    f32("coneOfResponseStdCoeffB", _scalar(getattr(self, "coneOfResponseStdCoeffB", 0.0)))
-    f32("coneOfResponseStdCoeffC", _scalar(getattr(self, "coneOfResponseStdCoeffC", 0.0)))
-    f32("tube_width", _scalar(getattr(self, "tube_width_z", 0.0)))
-    f32("cylRadiusProj3", _scalar(getattr(self, "tube_radius", 0.0)))
-    f32("bmin", _scalar(getattr(self, "bmin", 0.0)))
-    f32("bmax", _scalar(getattr(self, "bmax", 0.0)))
-    f32("Vmax", _scalar(getattr(self, "Vmax", 0.0)))
-    u32("rings", _int_scalar(getattr(self, "rings", 0)))
-    f32("helicalRadius", _scalar(getattr(self, "helicalRadius", 0.0)))
-    f3(
-        "totalFOVmin",
-        (
-            _scalar(getattr(self, "totalFOVxmin", 0.0)),
-            _scalar(getattr(self, "totalFOVymin", 0.0)),
-            _scalar(getattr(self, "totalFOVzmin", 0.0)),
-        ),
-    )
-    f3(
-        "totalFOVmax",
-        (
-            _scalar(getattr(self, "totalFOVxmax", 0.0)),
-            _scalar(getattr(self, "totalFOVymax", 0.0)),
-            _scalar(getattr(self, "totalFOVzmax", 0.0)),
-        ),
-    )
+    u32('nRowsD', int(self.nRowsD))
+    u32('nColsD', int(self.nColsD))
+    f2('dPitch', (float(self.dPitchX), float(self.dPitchY)))
+    f32('dL', float(self.dL))
+    f32('global_factor', float(self.global_factor))
+    f32('epps', float(self.epps))
+    u32('det_per_ring', int(self.det_per_ring))
+    f32('sigma_x', float(self.sigma_x))
+    f32('coneOfResponseStdCoeffA', float(self.coneOfResponseStdCoeffA))
+    f32('coneOfResponseStdCoeffB', float(self.coneOfResponseStdCoeffB))
+    f32('coneOfResponseStdCoeffC', float(self.coneOfResponseStdCoeffC))
+    f32('tube_width', float(self.tube_width_z))
+    f32('cylRadiusProj3', float(self.tube_radius))
+    f32('bmin', float(self.bmin))
+    f32('bmax', float(self.bmax))
+    f32('Vmax', float(self.Vmax))
+    u32('rings', int(self.rings))
+    f32('helicalRadius', float(self.helicalRadius))
+    f3('totalFOVmin', (
+        float(self.totalFOVxmin),
+        float(self.totalFOVymin),
+        float(self.totalFOVzmin),
+    ))
+    f3('totalFOVmax', (
+        float(self.totalFOVxmax),
+        float(self.totalFOVymax),
+        float(self.totalFOVzmax),
+    ))
 
-    u3("d_N", (nx, ny, nz))
-    f3("b", (bx, by, bz))
-    f2(
-        "dSize5",
-        (
-            _indexed_scalar(self, "dSizeX", volume, 0.0),
-            _indexed_scalar(self, "dSizeY", volume, 0.0),
-        ),
-    )
-    f32("kerroin4", _indexed_scalar(self, "kerroin", volume, 0.0))
-    f32("DSC", 0.0)
-    f3("d", (dx, dy, dz))
-    f3(
-        "d_Scale4",
-        (
-            _indexed_scalar(self, "dScaleX4", volume, 0.0),
-            _indexed_scalar(self, "dScaleY4", volume, 0.0),
-            _indexed_scalar(self, "dScaleZ4", volume, 0.0),
-        ),
-    )
-    f3(
-        "d_Scale5",
-        (
-            _indexed_scalar(self, "dScaleX", volume, 0.0),
-            _indexed_scalar(self, "dScaleY", volume, 0.0),
-            _indexed_scalar(self, "dScaleZ", volume, 0.0),
-        ),
-    )
-    f3("d_bmax", (bx + nx * dx, by + ny * dy, bz + nz * dz))
-    f32("orthWidth", _scalar(getattr(self, "tube_width_z", 0.0)))
-    i64("nProjections", _frame_subset_int(self, "nProjSubset", timestep, subset, 0))
-    u8("no_norm", _int_scalar(getattr(self, "no_norm", 1), 1))
-    u64("m_size", _frame_subset_int(self, "nMeasSubset", timestep, subset, 0))
-    u32("currentSubset", subset)
-    i32("aa", volume)
-
-    i3("N_PDHG", (0, 0, 0))
-    f32("epps_PDHG", 0.0)
-    f32("theta_PDHG", 0.0)
-    f32("tau_PDHG", 0.0)
-    u8("enforcePositivity_PDHG", 0)
-    i3("N_rotate", (0, 0, 0))
-    f32("cosa_rotate", 0.0)
-    f32("sina_rotate", 0.0)
-
+    u3('d_N', (nx, ny, nz))
+    f3('b', (bx, by, bz))
+    if self.FPType == 5 or self.BPType == 5:
+        f2('dSize5', (self.dSizeX[volume], self.dSizeY[volume]))
+        f3('d_Scale5', (self.dScaleX[volume], self.dScaleY[volume], self.dScaleZ[volume]))
+    if self.BPType == 4:
+        f32('kerroin4', float(self.kerroin[volume]))
+    f32('DSC', float(getattr(self, 'DSC', 0.0)))
+    f3('d', (dx, dy, dz))
+    if self.FPType == 4:
+        f3('d_Scale4', (self.dScaleX4[volume], self.dScaleY4[volume], self.dScaleZ4[volume]))
+    f3('d_bmax', (
+        bx + nx * dx,
+        by + ny * dy,
+        bz + nz * dz,
+    ))
+    f32('orthWidth', float(self.tube_width_z))
+    i64('nProjections', int(self.nProjSubset[timestep, subset]))
+    u8('no_norm', int(self.no_norm))
+    u64('m_size', int(self.nMeasSubset[timestep, subset]))
+    u32('currentSubset', subset)
+    i32('aa', volume)
+    i3('N_PDHG', (0, 0, 0))
+    f32('epps_PDHG', 0.0)
+    f32('theta_PDHG', 0.0)
+    f32('tau_PDHG', 0.0)
+    u8('enforcePositivity_PDHG', 0)
+    i3('N_rotate', (0, 0, 0))
+    f32('cosa_rotate', 0.0)
+    f32('sina_rotate', 0.0)
     return bytes(blob)
 
 
 def _mps_tensor_from_numpy(torch: Any, value: Any, dtype: Any) -> Any:
     arr = np.asarray(value, dtype=dtype)
-    return torch.as_tensor(np.ascontiguousarray(arr), device="mps")
+    return torch.as_tensor(np.ascontiguousarray(arr), device='mps')
 
 
 def _validate_configuration(self: Any) -> None:
-    unsupported = []
-    if not getattr(self, "SPECT", False):
-        unsupported.append("only SPECT is enabled in this first bridge")
-    if getattr(self, "FPType", None) not in (1, 2, 3):
-        unsupported.append("forward projector must be type 1, 2 or 3")
-    if getattr(self, "BPType", None) not in (1, 2, 3):
-        unsupported.append("backprojector must be type 1, 2 or 3")
-    if getattr(self, "useImages", False):
-        unsupported.append("useImages must be False")
-    if getattr(self, "listmode", 0) != 0:
-        unsupported.append("listmode must be disabled")
-    if getattr(self, "TOF", False):
-        unsupported.append("TOF is not yet wired")
-    if getattr(self, "attenuation_correction", False):
-        unsupported.append("attenuation correction is not yet wired")
-    if getattr(self, "normalization_correction", False):
-        unsupported.append("normalization correction is not yet wired")
-    if getattr(self, "additionalCorrection", False):
-        unsupported.append("additional/scatter correction is not yet wired")
-    if getattr(self, "useMaskFP", False) or getattr(self, "useMaskBP", False):
-        unsupported.append("forward/backprojection masks are not yet wired")
-    if getattr(self, "use_psf", False):
-        unsupported.append("separate PSF convolution is not yet wired")
-    if getattr(self, "nMultiVolumes", 0) != 0:
-        unsupported.append("multi-volume reconstruction is not yet wired")
-    if getattr(self, "use_64bit_atomics", False) or getattr(self, "use_32bit_atomics", False):
-        unsupported.append("integer accumulator conversion is not yet wired")
-    if unsupported:
-        raise NotImplementedError("Metal/MPS bridge configuration: " + "; ".join(unsupported))
-
-
+    fp_type = getattr(self, 'FPType', None)
+    bp_type = getattr(self, 'BPType', None)
+    errors: list[str] = []
+    if fp_type in (4, 5, 6):
+        errors.append(f'forward projector type {fp_type} is unsupported')
+    elif fp_type not in (1, 2, 3):
+        errors.append(f'forward projector type {fp_type!r} is unsupported')
+    if bp_type in (5, 6):
+        errors.append(f'backprojector type {bp_type} is unsupported')
+    elif bp_type not in (1, 2, 3, 4):
+        errors.append(f'backprojector type {bp_type!r} is unsupported')
+    if getattr(self, 'FDK', False):
+        errors.append('FDK is unsupported by the Metal/MPS custom-operator path')
+    if getattr(self, 'use_64bit_atomics', False) or getattr(self, 'use_32bit_atomics', False):
+        errors.append('integer accumulation is unsupported by the Metal/MPS custom-operator path')
+    if getattr(self, 'use_psf', False):
+        errors.append('PSF convolution is unsupported by the Metal/MPS custom-operator path')
+    if errors:
+        raise ValueError('Metal/MPS configuration: ' + '; '.join(errors))
 
 
 _SHADER_CACHE: dict[str, Any] = {}
@@ -325,7 +211,6 @@ _LOCAL_INCLUDE_RE = re.compile(r'^\s*#\s*include\s*"([^"]+)"\s*(?://.*)?$')
 
 
 def _iter_option_tokens(options: Iterable[Any]) -> Iterable[str]:
-    """Yield command-line-like tokens from OMEGA's bOpt tuples."""
     for option in options:
         text = str(option).strip()
         if not text:
@@ -334,21 +219,12 @@ def _iter_option_tokens(options: Iterable[Any]) -> Iterable[str]:
             tokens = shlex.split(text)
         except ValueError:
             tokens = text.split()
-        for token in tokens:
-            yield token.strip()
+        yield from (token.strip() for token in tokens)
 
 
 def _macro_preamble(options: Iterable[Any]) -> str:
-    """Convert OMEGA ``-D`` options into Metal source definitions.
-
-    Metal uses the ScalarKernelParams ABI directly.  The CUDA-only ``PYTHON``
-    macro must not be active, because it enables the legacy individual-scalar
-    reconstruction block in projectorType123.cl and duplicates variables that
-    are already produced by UNPACK_SCALAR_PARAMS_123.
-    """
     definitions: dict[str, str | None] = {}
     order: list[str] = []
-
     for token in _iter_option_tokens(options):
         if not token.startswith('-D') or len(token) <= 2:
             continue
@@ -358,35 +234,28 @@ def _macro_preamble(options: Iterable[Any]) -> str:
         else:
             name, value = body, None
         name = name.strip()
-        if not name or name == 'PYTHON':
+        if not name or name in {'PYTHON', 'USEIMAGES'}:
             continue
         if name not in definitions:
             order.append(name)
         definitions[name] = value.strip() if value is not None else None
-
     if 'METAL' not in definitions:
         order.insert(0, 'METAL')
         definitions['METAL'] = None
-
     lines = ['// Generated from OMEGA projector settings.']
     for name in order:
         value = definitions[name]
-        if value is None or value == '':
-            lines.append(f'#define {name} 1')
-        else:
-            lines.append(f'#define {name} {value}')
+        lines.append(f'#define {name} 1' if value in (None, '') else f'#define {name} {value}')
     return '\n'.join(lines) + '\n\n'
 
 
 def _resolve_local_include(name: str, current_dir: Path, search_dirs: tuple[Path, ...]) -> Path:
-    candidates = [current_dir / name]
-    candidates.extend(directory / name for directory in search_dirs)
+    candidates = [current_dir / name, *(directory / name for directory in search_dirs)]
     for candidate in candidates:
         candidate = candidate.resolve()
         if candidate.is_file():
             return candidate
-    searched = ', '.join(str(path) for path in candidates)
-    raise FileNotFoundError(f'Unable to resolve Metal include {name!r}; searched: {searched}')
+    raise FileNotFoundError(f'Unable to resolve Metal include {name!r}; searched: {candidates}')
 
 
 def _inline_local_includes(
@@ -396,78 +265,43 @@ def _inline_local_includes(
     search_dirs: tuple[Path, ...],
     active_stack: tuple[Path, ...] = (),
 ) -> str:
-    """Inline quoted local includes while preserving Metal/system includes.
-
-    ``kernelParams.hpp`` is injected explicitly before the common OMEGA source,
-    so any source-level include of that file is skipped here.  This guarantees
-    that ScalarKernelParams is declared before SCALAR_PARAMS is used and avoids
-    duplicate struct definitions.
-    """
     output: list[str] = []
     for line in source.splitlines():
         match = _LOCAL_INCLUDE_RE.match(line)
         if match is None:
             output.append(line)
             continue
-
         include_name = match.group(1)
         if Path(include_name).name == 'kernelParams.hpp':
             output.append('// kernelParams.hpp injected by mps_backend.py')
             continue
-
         include_path = _resolve_local_include(include_name, current_dir, search_dirs)
         if include_path in active_stack:
             chain = ' -> '.join(str(path) for path in (*active_stack, include_path))
             raise RuntimeError(f'Recursive Metal include detected: {chain}')
-
-        include_text = include_path.read_text(encoding='utf-8')
         output.append(f'// BEGIN INLINED INCLUDE: {include_path}')
-        output.append(
-            _inline_local_includes(
-                include_text,
-                current_dir=include_path.parent,
-                search_dirs=search_dirs,
-                active_stack=(*active_stack, include_path),
-            )
-        )
+        output.append(_inline_local_includes(
+            include_path.read_text(encoding='utf-8'),
+            current_dir=include_path.parent,
+            search_dirs=search_dirs,
+            active_stack=(*active_stack, include_path),
+        ))
         output.append(f'// END INLINED INCLUDE: {include_path}')
     return '\n'.join(output)
 
 
 def _find_kernel_params(root: Path, search_dirs: tuple[Path, ...]) -> Path:
-    candidates = [root / 'kernelParams.hpp']
-    candidates.extend(directory / 'kernelParams.hpp' for directory in search_dirs)
-    candidates.append(Path(__file__).resolve().with_name('kernelParams.hpp'))
+    candidates = [
+        root / 'kernelParams.hpp',
+        root.parent / 'cpp/kernelParams.hpp',
+        *(directory / 'kernelParams.hpp' for directory in search_dirs),
+        Path(__file__).resolve().with_name('kernelParams.hpp'),
+    ]
     for candidate in candidates:
         candidate = candidate.resolve()
         if candidate.is_file():
             return candidate
-    searched = ', '.join(str(path) for path in candidates)
-    raise FileNotFoundError(f'kernelParams.hpp was not found; searched: {searched}')
-
-
-def _metal_address_space_fixes(source: str) -> str:
-    """Apply Metal-only pointer address-space corrections for type-123 SPECT.
-
-    getDetectorCoordinatesSPECT accepts the geometry arrays as ``device``
-    pointers.  The generic kernel declaration used ``CONSTANT`` for d_xy/d_z,
-    which expands to Metal's ``constant`` address space and cannot be passed to
-    that helper.  These two read-only arrays are ordinary MPS buffers, so
-    ``const device`` is the correct declaration.
-    """
-    patterns = {
-        r'\bCONSTANT\s+float\s*\*\s*d_xy\s*\[\[buffer\(8\)\]\]':
-            'const CLGLOBAL float* d_xy [[buffer(8)]]',
-        r'\bCONSTANT\s+float\s*\*\s*d_z\s*\[\[buffer\(9\)\]\]':
-            'const CLGLOBAL float* d_z [[buffer(9)]]',
-    }
-    for pattern, replacement in patterns.items():
-        source, count = re.subn(pattern, replacement, source)
-        if count == 0:
-            raise RuntimeError(
-                f'Unable to locate required Metal kernel declaration matching {pattern!r}'
-            )
-    return source
+    raise FileNotFoundError(f'kernelParams.hpp was not found; searched: {candidates}')
 
 
 def _assemble_metal_source(
@@ -478,19 +312,9 @@ def _assemble_metal_source(
     root = Path(source_root).resolve()
     if not root.is_dir():
         raise FileNotFoundError(f'Metal source directory does not exist: {root}')
-
     search_dirs = (root, root.parent, root / 'include')
-    expanded = _inline_local_includes(
-        source_body,
-        current_dir=root,
-        search_dirs=search_dirs,
-    )
-    expanded = _metal_address_space_fixes(expanded)
-
-    kernel_params_path = root.parent / 'cpp/kernelParams.hpp' #_find_kernel_params(root, search_dirs)
-    kernel_params = kernel_params_path.read_text(encoding='utf-8')
-    # Wrap older unguarded copies, but do not nest the same guard around the
-    # guarded drop-in header because that would suppress the struct body.
+    expanded = _inline_local_includes(source_body, current_dir=root, search_dirs=search_dirs)
+    kernel_params = _find_kernel_params(root, search_dirs).read_text(encoding='utf-8')
     if 'OMEGA_KERNEL_PARAMS_HPP_INCLUDED' not in kernel_params:
         kernel_params = (
             '#ifndef OMEGA_KERNEL_PARAMS_HPP_INCLUDED\n'
@@ -498,7 +322,6 @@ def _assemble_metal_source(
             + kernel_params
             + '\n#endif // OMEGA_KERNEL_PARAMS_HPP_INCLUDED\n'
         )
-
     return (
         _macro_preamble(compiler_options)
         + '#include <metal_stdlib>\nusing namespace metal;\n\n'
@@ -517,11 +340,139 @@ def _compile_shader_cached(torch: Any, source: str, label: str) -> Any:
             library = torch.mps.compile_shader(source)
         except Exception as exc:
             raise RuntimeError(
-                f'Metal {label} projector compilation failed. '
-                f'Source SHA-256: {digest}'
+                f'Metal {label} projector compilation failed. Source SHA-256: {digest}'
             ) from exc
         _SHADER_CACHE[digest] = library
     return library
+
+
+def _without_compile_define(options: Iterable[Any], name: str) -> tuple[str, ...]:
+    filtered: list[str] = []
+    wanted = f'-D{name}'
+    for option in options:
+        tokens = [token for token in _iter_option_tokens((option,))
+                  if token != wanted and not token.startswith(wanted + '=')]
+        if tokens:
+            filtered.append(' '.join(tokens))
+    return tuple(filtered)
+
+
+def _upload_static_buffers(self: Any, torch: Any) -> None:
+    self.mps_empty_float32 = torch.empty(0, dtype=torch.float32, device='mps')
+    self.mps_empty_uint8 = torch.empty(0, dtype=torch.uint8, device='mps')
+    self.mps_empty_uint16 = torch.empty(0, dtype=torch.uint16, device='mps')
+    self.mps_empty_uint32 = torch.empty(0, dtype=torch.uint32, device='mps')
+    self.dummy_buffer = self.mps_empty_float32
+    self.d_Sens = torch.zeros(1, dtype=torch.float32, device='mps')
+
+    from .init import _initialize_coordinate_buffers
+    _initialize_coordinate_buffers(self, lambda value: _mps_tensor_from_numpy(torch, value, np.float32))
+    if getattr(self, 'listmode', 0) > 0 and not getattr(self, 'useIndexBasedReconstruction', False) and not getattr(self, 'loadTOF', False):
+        x = np.asarray(self.x, dtype=np.float32).ravel(order='F')
+        self.d_x = [[self.mps_empty_float32] * self.subsets for _ in range(self.Nt)]
+        for timestep in range(self.Nt):
+            for subset in range(self.subsets):
+                index = timestep * self.subsets + subset
+                start = self.nMeas[index] * 6
+                stop = self.nMeas[index + 1] * 6
+                values = x[start:stop]
+                if values.size:
+                    self.d_x[timestep][subset] = _mps_tensor_from_numpy(torch, values, np.float32)
+
+    self.d_rayShiftsDetector = _mps_tensor_from_numpy(torch, getattr(self, 'rayShiftsDetector', np.empty(0)), np.float32) if not _empty_value(getattr(self, 'rayShiftsDetector', np.empty(0))) else self.mps_empty_float32
+    self.d_rayShiftsSource = _mps_tensor_from_numpy(torch, getattr(self, 'rayShiftsSource', np.empty(0)), np.float32) if not _empty_value(getattr(self, 'rayShiftsSource', np.empty(0))) else self.mps_empty_float32
+    self.d_detectorVector = _mps_tensor_from_numpy(torch, np.asarray(self.DetectorVector, dtype=np.uint32), np.uint32) if getattr(self, 'SPECT', False) and not _empty_value(getattr(self, 'DetectorVector', np.empty(0))) else self.mps_empty_uint32
+    self.d_TOFCenter = _mps_tensor_from_numpy(torch, getattr(self, 'TOFCenter', np.empty(0)), np.float32) if not _empty_value(getattr(self, 'TOFCenter', np.empty(0))) else self.mps_empty_float32
+    self.d_V = _mps_tensor_from_numpy(torch, getattr(self, 'V', np.empty(0)), np.float32) if not _empty_value(getattr(self, 'V', np.empty(0))) else self.mps_empty_float32
+
+    attenuation = np.asarray(getattr(self, 'vaimennus', np.empty(0)), dtype=np.float32).ravel(order='F')
+    measurement_attenuation = attenuation if self.attenuation_correction and not self.CTAttenuation else np.empty(0, dtype=np.float32)
+    normalization = np.asarray(getattr(self, 'normalization', np.empty(0)), dtype=np.float32).ravel(order='F')
+    corr_vector = np.asarray(getattr(self, 'corrVector', np.empty(0)), dtype=np.float32).ravel(order='F')
+    offset_limit = np.asarray(getattr(self, 'OffsetLimit', np.empty(0)), dtype=np.float32).ravel(order='F')
+    xy_index = np.asarray(getattr(self, 'xy_index', np.empty(0)), dtype=np.uint32).ravel(order='F')
+    z_index = np.asarray(getattr(self, 'z_index', np.empty(0)), dtype=np.uint16).ravel(order='F')
+    tr_index = np.asarray(getattr(self, 'trIndex', np.empty(0)), dtype=np.uint16).ravel(order='F')
+    ax_index = np.asarray(getattr(self, 'axIndex', np.empty(0)), dtype=np.uint16).ravel(order='F')
+    tof_index = np.asarray(getattr(self, 'TOFIndices', np.empty(0)), dtype=np.uint8).ravel(order='F')
+    raw_data_length = np.asarray(getattr(self, 'LL', np.empty(0)), dtype=np.uint16).ravel(order='F')
+
+    self.d_attenuation = [[self.mps_empty_float32] * self.subsets for _ in range(self.Nt)]
+    self.d_norm = [[self.mps_empty_float32] * self.subsets for _ in range(self.Nt)]
+    self.d_scatter = [[self.mps_empty_float32] * self.subsets for _ in range(self.Nt)]
+    self.d_T = [[self.mps_empty_float32] * self.subsets for _ in range(self.Nt)]
+    self.d_xyindex = [[self.mps_empty_uint32] * self.subsets for _ in range(self.Nt)]
+    self.d_zindex = [[self.mps_empty_uint16] * self.subsets for _ in range(self.Nt)]
+    self.d_trIndex = [[self.mps_empty_uint16] * self.subsets for _ in range(self.Nt)]
+    self.d_axIndex = [[self.mps_empty_uint16] * self.subsets for _ in range(self.Nt)]
+    self.d_TOFIndex = [[self.mps_empty_uint8] * self.subsets for _ in range(self.Nt)]
+    self.d_L = [[self.mps_empty_uint16] * self.subsets for _ in range(self.Nt)]
+    for timestep in range(self.Nt):
+        for subset in range(self.subsets):
+            index = timestep * self.subsets + subset
+            measurement_start = self.nTotMeas[index]
+            measurement_stop = self.nTotMeas[index + 1]
+            projection_start = self.nMeas[index]
+            projection_stop = self.nMeas[index + 1]
+            if measurement_attenuation.size:
+                self.d_attenuation[timestep][subset] = _mps_tensor_from_numpy(torch, measurement_attenuation[measurement_start:measurement_stop], np.float32)
+            if normalization.size:
+                self.d_norm[timestep][subset] = _mps_tensor_from_numpy(torch, normalization[measurement_start:measurement_stop], np.float32)
+            if corr_vector.size:
+                self.d_scatter[timestep][subset] = _mps_tensor_from_numpy(torch, corr_vector[measurement_start:measurement_stop], np.float32)
+            if offset_limit.size:
+                self.d_T[timestep][subset] = _mps_tensor_from_numpy(torch, offset_limit[projection_start:projection_stop], np.float32)
+            if xy_index.size:
+                self.d_xyindex[timestep][subset] = _mps_tensor_from_numpy(torch, xy_index[projection_start:projection_stop], np.uint32)
+            if z_index.size:
+                self.d_zindex[timestep][subset] = _mps_tensor_from_numpy(torch, z_index[projection_start:projection_stop], np.uint16)
+            if tr_index.size:
+                self.d_trIndex[timestep][subset] = _mps_tensor_from_numpy(torch, tr_index[projection_start * 2:projection_stop * 2], np.uint16)
+            if ax_index.size:
+                self.d_axIndex[timestep][subset] = _mps_tensor_from_numpy(torch, ax_index[projection_start * 2:projection_stop * 2], np.uint16)
+            if tof_index.size:
+                self.d_TOFIndex[timestep][subset] = _mps_tensor_from_numpy(torch, tof_index[projection_start:projection_stop], np.uint8)
+            if raw_data_length.size:
+                self.d_L[timestep][subset] = _mps_tensor_from_numpy(torch, raw_data_length[projection_start:projection_stop], np.uint16)
+
+    self.d_attenuation_image = self.mps_empty_float32
+    if self.attenuation_correction and self.CTAttenuation and attenuation.size:
+        self.d_attenuation_image = _mps_tensor_from_numpy(torch, attenuation, np.float32)
+
+    mask_fp = getattr(self, 'maskFP', np.empty(0))
+    self.d_maskFP = [[self.mps_empty_uint8] * self.subsets for _ in range(self.Nt)]
+    if getattr(self, 'useMaskFP', False) and not _empty_value(mask_fp):
+        mask_fp = np.asarray(mask_fp, dtype=np.uint8).ravel(order='F')
+        frame_stride = int(self.nRowsD * self.nColsD)
+        for timestep in range(self.Nt):
+            for subset in range(self.subsets):
+                if int(getattr(self, 'maskFPZ', 1)) > 1:
+                    index = timestep * self.subsets + subset
+                    start = self.nMeas[index] * frame_stride
+                    stop = self.nMeas[index + 1] * frame_stride
+                    values = mask_fp[start:stop]
+                else:
+                    values = mask_fp
+                self.d_maskFP[timestep][subset] = _mps_tensor_from_numpy(torch, values, np.uint8)
+    self.d_maskBP = self.mps_empty_uint8
+    if self.useMaskBP and self.maskBP.size:
+        self.d_maskBP = _mps_tensor_from_numpy(torch, self.maskBP.ravel(order='F'), np.uint8)
+
+
+def _geometry_buffer(self: Any, name: str, timestep: int, subset: int) -> Any:
+    table = self.d_x if name == 'x' else self.d_z
+    selected_subset = subset
+    if name == 'x':
+        subset_geometry = (getattr(self, 'CT', False) or getattr(self, 'SPECT', False)) and getattr(self, 'listmode', 0) == 0
+        subset_geometry = subset_geometry or (getattr(self, 'listmode', 0) > 0 and not getattr(self, 'useIndexBasedReconstruction', False) and getattr(self, 'loadTOF', False))
+        if not subset_geometry:
+            selected_subset = 0
+    else:
+        subset_geometry = ((getattr(self, 'CT', False) or getattr(self, 'SPECT', False) or getattr(self, 'PET', False)) and getattr(self, 'listmode', 0) == 0)
+        if not subset_geometry and not (getattr(self, 'listmode', 0) > 0 and not getattr(self, 'useIndexBasedReconstruction', False)):
+            selected_subset = 0
+    value = table[timestep][selected_subset]
+    return self.mps_empty_float32 if value is None else value
 
 
 def init_mps_projector(
@@ -533,108 +484,106 @@ def init_mps_projector(
     options_fp: Iterable[Any],
     options_bp: Iterable[Any],
 ) -> None:
-    """Compile the Metal FP/BP variants once and move static data to MPS."""
     import torch
 
     _validate_configuration(self)
-
     if not torch.backends.mps.is_available():
         raise RuntimeError('PyTorch MPS is not available on this machine.')
     if not hasattr(torch.mps, 'compile_shader'):
-        raise RuntimeError(
-            'This backend requires a PyTorch version that provides '
-            'torch.mps.compile_shader().'
-        )
+        raise RuntimeError('This backend requires torch.mps.compile_shader().')
+
+    self.useImages = False # PyTorch binds arrays as Metal buffers
 
     self.no_norm = 1
-    self.mSize = self.nRowsD * self.nColsD * self.nProjections
+    self.mSize = int(self.nRowsD * self.nColsD * self.nProjections)
 
+    options_fp = _without_compile_define(tuple(options_fp), 'USEIMAGES')
+    options_bp = _without_compile_define(tuple(options_bp), 'USEIMAGES')
     complete_fp = _assemble_metal_source(source_fp, options_fp, source_root)
     complete_bp = _assemble_metal_source(source_bp, options_bp, source_root)
     self.mps_lib_fp = _compile_shader_cached(torch, complete_fp, 'forward')
     self.mps_lib_bp = _compile_shader_cached(torch, complete_bp, 'backward')
-
+    fp_name = 'projectorType123'
+    bp_name = 'projectorType123' if int(self.BPType) in (1, 2, 3) else 'projectorType4Backward'
     try:
-        self.knlF = self.mps_lib_fp.projectorType123
-        self.knlB = self.mps_lib_bp.projectorType123
+        self.knlF = getattr(self.mps_lib_fp, fp_name)
+        self.knlB = getattr(self.mps_lib_bp, bp_name)
     except AttributeError as exc:
-        raise RuntimeError(
-            "Compiled Metal library does not expose 'projectorType123'."
-        ) from exc
+        raise RuntimeError(f"Compiled Metal library does not expose '{fp_name}'/'{bp_name}'.") from exc
 
-    # A reusable placeholder occupies compile-time inactive/gapped Metal slots.
-    self.mps_dummy_buffer = torch.zeros(1, dtype=torch.uint8, device='mps')
-    self.d_Sens = torch.zeros(1, dtype=torch.float32, device='mps')
-
-    self.d_x = [[None] * self.subsets for _ in range(self.Nt)]
-    self.d_z = [[None] * self.subsets for _ in range(self.Nt)]
-    x_frames = getattr(self, 'xFrames', None)
-    z_frames = getattr(self, 'zFrames', None)
-    if not isinstance(x_frames, list) or len(x_frames) != self.Nt:
-        if self.Nt > 1:
-            raise ValueError('Dynamic Metal/MPS projection geometry must provide one xFrames entry per timeframe.')
-        x_flat = np.asarray(self.x, dtype=np.float32).ravel()
-        x_frames = [x_flat]
-    if not isinstance(z_frames, list) or len(z_frames) != self.Nt:
-        if self.Nt > 1:
-            raise ValueError('Dynamic Metal/MPS projection geometry must provide one zFrames entry per timeframe.')
-        z_flat = np.asarray(self.z, dtype=np.float32).ravel()
-        z_frames = [z_flat]
-    z_stride = 6 if self.pitch else 2
-    for timestep in range(self.Nt):
-        x_frame = np.asarray(x_frames[timestep], dtype=np.float32).ravel(order='F')
-        z_frame = np.asarray(z_frames[timestep], dtype=np.float32).ravel(order='F')
-        subset_offsets = np.concatenate(([0], np.cumsum(
-            np.asarray(self.nProjSubset[timestep], dtype=np.int64), dtype=np.int64
-        )))
-        for subset in range(self.subsets):
-            start = int(subset_offsets[subset])
-            stop = int(subset_offsets[subset + 1])
-            self.d_x[timestep][subset] = _mps_tensor_from_numpy(
-                torch, x_frame[start * 6 : stop * 6], np.float32
-            )
-            self.d_z[timestep][subset] = _mps_tensor_from_numpy(
-                torch, z_frame[start * z_stride : stop * z_stride], np.float32
-            )
-
-    self.d_rayShiftsDetector = _mps_tensor_from_numpy(
-        torch, self.rayShiftsDetector, np.float32
-    )
-    self.d_rayShiftsSource = _mps_tensor_from_numpy(
-        torch, self.rayShiftsSource, np.float32
-    )
-
-    # One immutable ScalarKernelParams buffer per timeframe/subset/volume.
+    _upload_static_buffers(self, torch)
     self.mps_scalar_params = []
     for timestep in range(self.Nt):
         per_subset = []
         for subset in range(self.subsets):
             per_volume = []
-            for volume in range(self.nMultiVolumes + 1):
-                blob = _pack_scalar_kernel_params(self, timestep, subset, volume)
-                cpu_bytes = np.frombuffer(blob, dtype=np.uint8).copy()
-                per_volume.append(torch.as_tensor(cpu_bytes, device='mps'))
+            for volume in range(int(self.nMultiVolumes) + 1):
+                packed = np.frombuffer(_pack_scalar_kernel_params(self, timestep, subset, volume), dtype=np.uint8).copy()
+                per_volume.append(torch.as_tensor(packed, device='mps'))
             per_subset.append(per_volume)
         self.mps_scalar_params.append(per_subset)
 
-
-def _kernel_args(self: Any, scalar_params: Any, dynamic_input: Any, output: Any, subset: int, timestep: int) -> list[Any]:
-    """Construct positional arguments matching explicit Metal buffer indices 0..20."""
-    args = [self.mps_dummy_buffer] * 21
+def _kernel_args(
+    self: Any,
+    scalar_params: Any,
+    dynamic_input: Any,
+    output: Any,
+    subset: int,
+    timestep: int,
+    direction: str,
+) -> list[Any]:
+    """Bind every Metal resource slot, using typed empty buffers when inactive."""
+    empty_f = self.mps_empty_float32
+    empty_u8 = self.mps_empty_uint8
+    empty_u16 = self.mps_empty_uint16
+    empty_u32 = self.mps_empty_uint32
+    atten = self.d_attenuation_image if getattr(self, 'CTAttenuation', False) else self.d_attenuation[timestep][subset]
+    args = [empty_f] * (22 if getattr(self, 'SPECT', False) else 21)
     args[0] = scalar_params
     args[1] = self.d_rayShiftsDetector
     args[2] = self.d_rayShiftsSource
-    args[8] = self.d_x[timestep][subset]
-    args[9] = self.d_z[timestep][subset]
+    if getattr(self, 'SPECT', False):
+        args[21] = self.d_detectorVector
+    args[3] = self.d_TOFCenter
+    args[4] = self.d_V
+    args[5] = atten
+    args[6] = self.d_maskFP[timestep][subset]
+    args[7] = self.d_maskBP
+    args[8] = _geometry_buffer(self, 'x', timestep, subset)
+    args[9] = _geometry_buffer(self, 'z', timestep, subset)
+    args[10] = self.d_norm[timestep][subset]
+    args[11] = self.d_scatter[timestep][subset]
     args[12] = self.d_Sens
+    args[13] = self.d_xyindex[timestep][subset]
+    args[14] = self.d_zindex[timestep][subset]
+    args[15] = self.d_trIndex[timestep][subset]
+    args[16] = self.d_axIndex[timestep][subset]
+    args[17] = self.d_TOFIndex[timestep][subset]
+    args[18] = self.d_L[timestep][subset]
     args[19] = dynamic_input
     args[20] = output
+    if direction == 'forward' and int(self.FPType) not in (1, 2, 3):
+        raise ValueError(f'Unsupported Metal/MPS forward projector type: {self.FPType}')
+    if direction == 'backward' and int(self.BPType) not in (1, 2, 3):
+        if int(self.BPType) != 4:
+            raise ValueError(f'Unsupported Metal/MPS backprojector type: {self.BPType}')
+        args4 = [empty_f] * 10
+        args4[0] = scalar_params
+        args4[1] = self.d_T[timestep][subset]
+        args4[2] = dynamic_input
+        args4[3] = getattr(self, 'mps_fdk_angle', empty_f)
+        args4[4] = output
+        args4[5] = _geometry_buffer(self, 'x', timestep, subset)
+        args4[6] = _geometry_buffer(self, 'z', timestep, subset)
+        args4[7] = self.d_Sens
+        args4[8] = self.d_norm[timestep][subset]
+        args4[9] = self.d_maskBP if getattr(self, 'useMaskBP', False) else empty_u8
+        return args4
     return args
 
 
 def _require_mps_float32_contiguous(tensor: Any, name: str) -> Any:
     import torch
-
     if not isinstance(tensor, torch.Tensor):
         raise TypeError(f'{name} must be a PyTorch tensor')
     if tensor.device.type != 'mps':
@@ -644,63 +593,56 @@ def _require_mps_float32_contiguous(tensor: Any, name: str) -> Any:
     return tensor.contiguous()
 
 
-def forward_projection_mps(self: Any, f: Any, subset: int = -1, timestep: int = -1) -> Any:
-    import torch
+def _projection_size(self: Any, timestep: int, subset: int) -> int:
+    if int(getattr(self, 'subsetType', 0)) > 7 or self.subsets == 1:
+        return int(self.nRowsD * self.nColsD * self.nProjSubset[timestep, subset])
+    return int(self.nMeasSubset[timestep, subset])
 
-    if subset == -1:
-        subset = self.subset
-    if timestep == -1:
-        timestep = self.timestep
-    subset = int(subset)
-    timestep = int(timestep)
+
+def forward_projection_mps(self: Any, f: Any, subset: int, timestep: int) -> Any:
+    import torch
     if not 0 <= timestep < self.Nt or not 0 <= subset < self.subsets:
         raise IndexError('timestep and subset must identify an initialized frame/subset pair')
-    f = _require_mps_float32_contiguous(f, 'forward image')
-    if f.numel() != _indexed_int(self, 'N', 0):
-        raise ValueError(
-            f"Forward image has {f.numel()} elements, expected {_indexed_int(self, 'N', 0)}"
+    _validate_configuration(self)
+    volume_count = self.nMultiVolumes + 1
+    inputs = list(f) if isinstance(f, (list, tuple)) else [f] * volume_count
+    if len(inputs) != volume_count:
+        raise ValueError(f'Expected {volume_count} volume tensors, got {len(inputs)}')
+    for volume in range(volume_count):
+        image = _require_mps_float32_contiguous(inputs[volume], f'volume {volume}')
+        if image.numel() != self.N[volume]:
+            raise ValueError(f'Volume {volume} has {image.numel()} elements, expected {self.N[volume]}')
+        inputs[volume] = image
+    output = torch.zeros(_projection_size(self, timestep, subset), dtype=torch.float32, device='mps')
+    for volume, image in enumerate(inputs):
+        partial = torch.zeros_like(output)
+        args = _kernel_args(self, self.mps_scalar_params[timestep][subset][volume], image, partial, subset, timestep, 'forward')
+        self.knlF(
+            *args,
+            threads=tuple(int(value) for value in self.globalSizeFP[timestep][subset]),
+            group_size=tuple(int(value) for value in self.localSizeFP),
         )
-
-    if self.subsetType > 7 or self.subsets == 1:
-        output_size = int(self.nRowsD * self.nColsD * _frame_subset_int(self, 'nProjSubset', timestep, subset))
-    else:
-        output_size = _frame_subset_int(self, 'nMeasSubset', timestep, subset)
-    output = torch.zeros(output_size, dtype=torch.float32, device='mps')
-
-    args = _kernel_args(self, self.mps_scalar_params[timestep][subset][0], f, output, subset, timestep)
-    self.knlF(
-        *args,
-        threads=tuple(int(v) for v in self.globalSizeFP[timestep][subset]),
-        group_size=tuple(int(v) for v in self.localSizeFP),
-    )
+        output += partial
     return output
 
 
-def backward_projection_mps(self: Any, y: Any, subset: int = -1, timestep: int = -1) -> Any:
+def backward_projection_mps(self: Any, y: Any, subset: int, timestep: int) -> Any:
     import torch
-
-    if subset == -1:
-        subset = self.subset
-    if timestep == -1:
-        timestep = self.timestep
-    subset = int(subset)
-    timestep = int(timestep)
     if not 0 <= timestep < self.Nt or not 0 <= subset < self.subsets:
         raise IndexError('timestep and subset must identify an initialized frame/subset pair')
+    _validate_configuration(self)
     y = _require_mps_float32_contiguous(y, 'backprojection input')
-
-    if self.subsetType > 7 or self.subsets == 1:
-        expected = int(self.nRowsD * self.nColsD * _frame_subset_int(self, 'nProjSubset', timestep, subset))
-    else:
-        expected = _frame_subset_int(self, 'nMeasSubset', timestep, subset)
+    expected = _projection_size(self, timestep, subset)
     if y.numel() != expected:
         raise ValueError(f'Backprojection input has {y.numel()} elements, expected {expected}')
-
-    output = torch.zeros(_indexed_int(self, 'N', 0), dtype=torch.float32, device='mps')
-    args = _kernel_args(self, self.mps_scalar_params[timestep][subset][0], y, output, subset, timestep)
-    self.knlB(
-        *args,
-        threads=tuple(int(v) for v in self.globalSizeBP[timestep][subset][0]),
-        group_size=tuple(int(v) for v in self.localSizeBP),
-    )
-    return output
+    outputs: list[Any] = []
+    for volume in range(int(self.nMultiVolumes) + 1):
+        output = torch.zeros(int(np.asarray(self.N).reshape(-1)[volume]), dtype=torch.float32, device='mps')
+        args = _kernel_args(self, self.mps_scalar_params[timestep][subset][volume], y, output, subset, timestep, 'backward')
+        self.knlB(
+            *args,
+            threads=tuple(int(value) for value in self.globalSizeBP[timestep][subset][volume]),
+            group_size=tuple(int(value) for value in self.localSizeBP),
+        )
+        outputs.append(output)
+    return outputs[0] if int(self.nMultiVolumes) == 0 else outputs
