@@ -928,7 +928,21 @@ def SPECTParameters(options: proj.projectorClass):
                 for kk in range(options.nRays):
                     options.rayShiftsSource[2 * kk, :, :, :] = tmp_shift[2 * kk]
                     options.rayShiftsSource[2 * kk + 1, :, :, :] = tmp_shift[2 * kk + 1]
-            
+
+        if options.projector_type in [1, 11, 12, 21]:
+            # Scale each source-detector shift difference so that the two angular response components use their corresponding septa lengths.
+            referenceLength = options.colD + 0.5 * options.colL
+            lengthXY = options.colD + 0.5 * options.colLxy
+            lengthZ = options.colD + 0.5 * options.colLz
+            if referenceLength != lengthZ:
+                detectorShiftXY = options.rayShiftsDetector[0::2, :, :, :]
+                options.rayShiftsSource[0::2, :, :, :] = detectorShiftXY + \
+                    (options.rayShiftsSource[0::2, :, :, :] - detectorShiftXY) * (referenceLength / lengthZ)
+            if referenceLength != lengthXY:
+                detectorShiftZ = options.rayShiftsDetector[1::2, :, :, :]
+                options.rayShiftsSource[1::2, :, :, :] = detectorShiftZ + \
+                    (options.rayShiftsSource[1::2, :, :, :] - detectorShiftZ) * (referenceLength / lengthXY)
+
         options.rayShiftsDetector = options.rayShiftsDetector.ravel('F')
         options.rayShiftsSource = options.rayShiftsSource.ravel('F')
 

@@ -26,6 +26,15 @@ function options = OMEGA_error_check(options)
 options = setMissingValues(options);
 options = convertOptions(options);
 
+if options.SPECT
+    if ~isfield(options, 'colLxy') || isempty(options.colLxy) % SPECT collimator hole length in the transaxial plane
+        options.colLxy = options.colL;
+    end
+    if ~isfield(options, 'colLz') || isempty(options.colLz) % SPECT collimator hole length in the axial plane
+        options.colLz = options.colL;
+    end
+end
+
 % SPECT collimator ray shifts are stored once per detector head and detector
 % element.
 if options.SPECT

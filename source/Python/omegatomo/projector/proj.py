@@ -26,6 +26,7 @@ import numpy.typing as npt
 import ctypes
 import math
 import os
+from typing import Optional
 from .coordinates import computePixelCenters
 from .coordinates import computePixelSize
 from .coordinates import computeProjectorScalingValues
@@ -205,6 +206,8 @@ class projectorClass:
     sigmaZ = -1.
     sigmaXY = -1.
     colL: float = 0. # Collimator hole length
+    colLxy: Optional[float] = None # Collimator hole length in the transaxial plane
+    colLz: Optional[float] = None # Collimator hole length in the axial plane
     colR: float = 0. # Collimator hole radius
     colD: float = 0. # Distance from collimator hole centre to detector surface
     colFxy: float = np.inf # Collimator focal distance, XY plane
@@ -1167,6 +1170,11 @@ class projectorClass:
         
     def OMEGAErrorCheck(self):
         if self.SPECT:
+            if self.colLxy is None:
+                self.colLxy = self.colL
+            if self.colLz is None:
+                self.colLz = self.colL
+
             if not hasattr(self, 'DetectorVector') or self.DetectorVector is None or np.size(self.DetectorVector) == 0:
                 self.DetectorVector = np.zeros(int(self.nProjections), dtype=np.uint32)
             else:
