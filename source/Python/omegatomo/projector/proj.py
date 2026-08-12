@@ -1625,7 +1625,10 @@ class projectorClass:
                     else:
                         print('PSF ON.')
                 if self.attenuation_correction and not self.CT:
-                    print('Attenuation correction ON.')
+                    if self.CT_attenuation or self.CTAttenuation:
+                        print('Attenuation correction (image domain) ON.')
+                    else:
+                        print('Attenuation correction (measurement domain) ON.')
                 
                 if self.randoms_correction and not self.CT:
                     dispi = 'Randoms correction ON'

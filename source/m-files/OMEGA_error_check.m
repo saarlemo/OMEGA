@@ -917,7 +917,11 @@ if options.verbose > 0
 
         end
         if options.attenuation_correction && ~options.CT
-            disp('Attenuation correction ON.')
+            if options.CT_attenuation
+                disp('Attenuation correction (image domain) ON.')
+            else
+                disp('Attenuation correction (measurement domain) ON.')
+            end
         end
         if options.randoms_correction && ~options.CT
             dispi = 'Randoms correction ON';
