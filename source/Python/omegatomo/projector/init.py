@@ -752,8 +752,6 @@ def initProjector(self):
                     else:
                         self.kIndF += (cp.float32(self.tube_radius),)
                     self.kIndF += (cp.float32(self.bmin), cp.float32(self.bmax), cp.float32(self.Vmax),)
-                if self.useMaskFP:
-                    self.kIndF += (self.d_maskFP,)
                 if self.FPType in [1, 2, 3]:
                     if self.TOF:
                         self.kIndF += (self.d_TOFCenter, )
