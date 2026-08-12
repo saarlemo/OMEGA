@@ -5,6 +5,14 @@ Created on Thu Jul 10 13:25:14 2025
 
 import numpy as np
 
+def _mask_fp_resource(self, subset):
+    if self.SPECT and self.maskFPZ == self.nHeads:
+        return self.d_maskFP
+    if self.maskFPZ > 1:
+        return self.d_maskFP[subset]
+    return self.d_maskFP
+
+
 def conv3D(self, f, ii = 0):
     if getattr(self, "useMetal", False):
         raise NotImplementedError("The separate PSF convolution kernel is not yet wired to the Metal/MPS bridge.")
@@ -312,10 +320,7 @@ def forwardProjection(self, f, subset: int = -1, timestep: int = -1):
                         else:
                             kIndLoc += (self.d_z[timestep][0],)
                         if self.useMaskFP:
-                            if self.maskFPZ > 1:
-                                kIndLoc += (self.d_maskFP[subset],)
-                            else:
-                                kIndLoc += (self.d_maskFP,)
+                            kIndLoc += (_mask_fp_resource(self, subset),)
                         kIndLoc += (cp.int64(self.nProjSubset[timestep, subset].item()),)
                         if ((self.subsetType == 3 or self.subsetType == 6 or self.subsetType == 7) and self.subsets > 1 and self.listmode == 0):
                             kIndLoc += (self.d_xyindex[subset],)
@@ -341,18 +346,12 @@ def forwardProjection(self, f, subset: int = -1, timestep: int = -1):
                         else:
                             kIndLoc += (y,)
                         if self.useMaskFP:
-                            if self.maskFPZ > 1:
-                                kIndLoc += (self.d_maskFP[subset],)
-                            else:
-                                kIndLoc += (self.d_maskFP,)
+                            kIndLoc += (_mask_fp_resource(self, subset),)
                         kIndLoc += (cp.int64(self.nProjSubset[timestep, subset].item()),)
                         # if self.meanFP:
                     elif self.FPType in [1, 2, 3]:
                         if self.useMaskFP:
-                            if self.maskFPZ > 1:
-                                kIndLoc += (self.d_maskFP[subset],)
-                            else:
-                                kIndLoc += (self.d_maskFP,)
+                            kIndLoc += (_mask_fp_resource(self, subset),)
                         if (self.CT or self.PET or self.SPECT) and self.listmode == 0:
                             kIndLoc += (cp.int64(self.nProjSubset[timestep, subset].item()),)
                         if (((self.listmode == 0 and not (self.CT or self.SPECT)) or self.useIndexBasedReconstruction)) or (not self.loadTOF and self.listmode > 0):
@@ -436,6 +435,8 @@ def forwardProjection(self, f, subset: int = -1, timestep: int = -1):
                             kIndLoc += (yD,)
                         else:
                             kIndLoc += (y,)
+                        if self.SPECT:
+                            kIndLoc += (self.d_detectorVector[timestep][subset],)
                         kIndLoc += (cp.uint8(self.no_norm),)
                         kIndLoc += (cp.uint64(self.nMeasSubset[timestep, subset].item()),)
                         kIndLoc += (cp.uint32(subset),)
@@ -615,10 +616,7 @@ def forwardProjection(self, f, subset: int = -1, timestep: int = -1):
                         self.knlF.set_arg(kIndLoc, self.d_z[timestep][0].data)
                     kIndLoc += 1
                     if self.useMaskFP:
-                        if self.maskFPZ > 1:
-                            self.knlF.set_arg(kIndLoc, self.d_maskFP[subset])
-                        else:
-                            self.knlF.set_arg(kIndLoc, self.d_maskFP)
+                        self.knlF.set_arg(kIndLoc, _mask_fp_resource(self, subset))
                         kIndLoc += 1
                     self.knlF.set_arg(kIndLoc, (cl.cltypes.long)(self.nProjSubset[timestep, subset].item()))
                     kIndLoc += 1
@@ -655,19 +653,13 @@ def forwardProjection(self, f, subset: int = -1, timestep: int = -1):
                         self.knlF.set_arg(kIndLoc, y.data)
                     kIndLoc += 1
                     if self.useMaskFP:
-                        if self.maskFPZ > 1:
-                            self.knlF.set_arg(kIndLoc, self.d_maskFP[subset])
-                        else:
-                            self.knlF.set_arg(kIndLoc, self.d_maskFP)
+                        self.knlF.set_arg(kIndLoc, _mask_fp_resource(self, subset))
                         kIndLoc += 1
                     self.knlF.set_arg(kIndLoc, (cl.cltypes.long)(self.nProjSubset[timestep, subset].item()))
                     # if self.meanFP:
                 elif self.FPType in [1, 2, 3]:
                     if self.useMaskFP:
-                        if self.maskFPZ > 1:
-                            self.knlF.set_arg(kIndLoc, self.d_maskFP[subset])
-                        else:
-                            self.knlF.set_arg(kIndLoc, self.d_maskFP)
+                        self.knlF.set_arg(kIndLoc, _mask_fp_resource(self, subset))
                         kIndLoc += 1
                     if (self.CT or self.PET or self.SPECT) and self.listmode == 0:
                         self.knlF.set_arg(kIndLoc, (cl.cltypes.long)(self.nProjSubset[timestep, subset].item()))
@@ -724,6 +716,9 @@ def forwardProjection(self, f, subset: int = -1, timestep: int = -1):
                     else:
                         self.knlF.set_arg(kIndLoc, y.data)
                     kIndLoc += 1
+                    if self.SPECT:
+                        self.knlF.set_arg(kIndLoc, self.d_detectorVector[timestep][subset].data)
+                        kIndLoc += 1
                     self.knlF.set_arg(kIndLoc, (cl.cltypes.uchar)(self.no_norm))
                     kIndLoc += 1
                     self.knlF.set_arg(kIndLoc, (cl.cltypes.ulong)(self.nMeasSubset[timestep, subset].item()))
@@ -899,10 +894,7 @@ def backwardProjection(self, y, subset = -1, timestep = -1):
                         if (self.attenuation_correction and not self.CTAttenuation):
                             kIndLoc += (self.d_atten[subset],)
                         if self.useMaskFP:
-                            if self.maskFPZ > 1:
-                                kIndLoc += (self.d_maskFP[subset],)
-                            else:
-                                kIndLoc += (self.d_maskFP,)
+                            kIndLoc += (_mask_fp_resource(self, subset),)
                         if self.useMaskBP:
                             kIndLoc += (self.d_maskBP,)
                         if (self.CT or self.PET or self.SPECT) and self.listmode == 0:
@@ -953,6 +945,8 @@ def backwardProjection(self, y, subset = -1, timestep = -1):
                                 kIndLoc += (f[k],)
                             else:
                                 kIndLoc += (f,)
+                        if self.SPECT:
+                            kIndLoc += (self.d_detectorVector[timestep][subset],)
                         kIndLoc += (cp.uint8(self.no_norm),)
                         kIndLoc += (cp.uint64(self.nMeasSubset[timestep, subset].item()),)
                         kIndLoc += (cp.uint32(subset),)
@@ -1082,10 +1076,7 @@ def backwardProjection(self, y, subset = -1, timestep = -1):
                             else:
                                 kIndLoc += (self.d_z[timestep][0],)
                             if self.useMaskFP:
-                                if self.maskFPZ > 1:
-                                    kIndLoc += (self.d_maskFP[subset],)
-                                else:
-                                    kIndLoc += (self.d_maskFP,)
+                                kIndLoc += (_mask_fp_resource(self, subset),)
                             if self.useMaskBP:
                                 kIndLoc += (self.d_maskBP,)
                             kIndLoc += (cp.int64(self.nProjSubset[timestep, subset].item()),)
@@ -1176,10 +1167,7 @@ def backwardProjection(self, y, subset = -1, timestep = -1):
                         self.knlB.set_arg(kIndLoc, self.d_atten[subset].data)
                         kIndLoc += 1
                     if self.useMaskFP:
-                        if self.maskFPZ > 1:
-                            self.knlB.set_arg(kIndLoc, self.d_maskFP[subset])
-                        else:
-                            self.knlB.set_arg(kIndLoc, self.d_maskFP)
+                        self.knlB.set_arg(kIndLoc, _mask_fp_resource(self, subset))
                         kIndLoc += 1
                     if self.useMaskBP:
                         self.knlB.set_arg(kIndLoc, self.d_maskBP)
@@ -1241,6 +1229,9 @@ def backwardProjection(self, y, subset = -1, timestep = -1):
                         else:
                             self.knlB.set_arg(kIndLoc, f.data)
                     kIndLoc += 1
+                    if self.SPECT:
+                        self.knlB.set_arg(kIndLoc, self.d_detectorVector[timestep][subset].data)
+                        kIndLoc += 1
                     self.knlB.set_arg(kIndLoc, (cl.cltypes.uchar)(self.no_norm))
                     kIndLoc += 1
                     self.knlB.set_arg(kIndLoc, (cl.cltypes.ulong)(self.nMeasSubset[timestep, subset].item()))
@@ -1347,10 +1338,7 @@ def backwardProjection(self, y, subset = -1, timestep = -1):
                             self.knlB.set_arg(kIndLoc, self.d_z[timestep][0].data)
                         kIndLoc += 1
                         if self.useMaskFP:
-                            if self.maskFPZ > 1:
-                                self.knlB.set_arg(kIndLoc, self.d_maskFP[subset])
-                            else:
-                                self.knlB.set_arg(kIndLoc, self.d_maskFP)
+                            self.knlB.set_arg(kIndLoc, _mask_fp_resource(self, subset))
                             kIndLoc += 1
                         if self.useMaskBP:
                             self.knlB.set_arg(kIndLoc, self.d_maskBP)

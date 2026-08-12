@@ -38,6 +38,9 @@ end
 % SPECT collimator ray shifts are stored once per detector head and detector
 % element.
 if options.SPECT
+    if options.normalization_correction && ndims(options.normalization) == 3
+        options.normZ = size(options.normalization, 3);
+    end
     if ~isfield(options, 'DetectorVector') || isempty(options.DetectorVector)
         options.DetectorVector = zeros(options.nProjections, 1, 'uint32');
     elseif numel(options.DetectorVector) ~= options.nProjections
@@ -46,8 +49,19 @@ if options.SPECT
     else
         options.DetectorVector = uint32(options.DetectorVector(:));
     end
+    if any(options.DetectorVector >= options.nHeads)
+        error('DetectorVector contains an index outside the available detector heads.')
+    end
+    if options.useMaskFP && options.maskFPZ == options.nHeads && ...
+            numel(options.maskFP) ~= options.nRowsD * options.nColsD * options.nHeads
+        error('Detector-indexed forward mask must contain one image for each detector head.')
+    end
+    if options.normalization_correction && options.normZ == options.nHeads && ...
+            numel(options.normalization) ~= options.nRowsD * options.nColsD * options.nHeads
+        error('Detector-indexed normalization must contain one image for each detector head.')
+    end
 
-    if ismember(options.projector_type, [1, 11, 12, 2, 21, 22])
+    if ismember(options.projector_type, [1, 11, 12, 2, 21, 22, 3, 13, 23, 31, 32, 33])
         if isfield(options, 'nHeads') && ~isempty(options.nHeads)
             nHeads = double(options.nHeads);
         else

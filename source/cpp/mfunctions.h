@@ -190,7 +190,7 @@ inline void loadInput(scalarStruct& inputScalars, const mxArray* options, const 
 		inputScalars.nColsD = getScalarUInt32(getField(options, 0, "nColsD"));
 		inputScalars.nRowsD = getScalarUInt32(getField(options, 0, "nRowsD"));
 		inputScalars.nHeads = getScalarUInt32(getField(options, 0, "nHeads"));
-        if (inputScalars.FPType == 1 || inputScalars.FPType == 2 || inputScalars.BPType == 1 || inputScalars.BPType == 2) {
+        if (inputScalars.FPType == 1 || inputScalars.FPType == 2 || inputScalars.FPType == 3 || inputScalars.BPType == 1 || inputScalars.BPType == 2 || inputScalars.BPType == 3) {
             inputScalars.coneOfResponseStdCoeffA = getScalarFloat(getField(options, 0, "coneOfResponseStdCoeffA"));
             inputScalars.coneOfResponseStdCoeffB = getScalarFloat(getField(options, 0, "coneOfResponseStdCoeffB"));
             inputScalars.coneOfResponseStdCoeffC = getScalarFloat(getField(options, 0, "coneOfResponseStdCoeffC"));
@@ -257,6 +257,9 @@ inline void form_data_variables(Weighting& w_vec, const mxArray* options, scalar
 			mexEval();
 		}
 	}
+    if (inputScalars.normalization_correction)
+        if (mxGetFieldNumber(options, "normZ") >= 0)
+            inputScalars.normZ = getScalarUInt32(getField(options, 0, "normZ"));
 	if (inputScalars.maskBP) {
 		w_vec.maskBP = getUint8s(options, "maskBP");
 		inputScalars.maskBPZ = getScalarUInt32(getField(options, 0, "maskBPZ"));
@@ -283,7 +286,7 @@ inline void form_data_variables(Weighting& w_vec, const mxArray* options, scalar
 		w_vec.nProjections = getScalarInt64(getField(options, 0, "nProjections"));
 		w_vec.dPitchX = getScalarFloat(getField(options, 0, "dPitchX"));
 		w_vec.dPitchY = getScalarFloat(getField(options, 0, "dPitchY"));
-		if (inputScalars.FPType == 1 || inputScalars.FPType == 2 || inputScalars.BPType == 1 || inputScalars.BPType == 2) {
+		if (inputScalars.FPType == 1 || inputScalars.FPType == 2 || inputScalars.FPType == 3 || inputScalars.BPType == 1 || inputScalars.BPType == 2 || inputScalars.BPType == 3) {
 			w_vec.rayShiftsDetector = getSingles(options, "rayShiftsDetector");
 			w_vec.rayShiftsSource = getSingles(options, "rayShiftsSource");
 			w_vec.detectorVector = getUint32s(options, "DetectorVector");

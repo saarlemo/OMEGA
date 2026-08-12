@@ -130,6 +130,8 @@ struct inputStruct {
     uint32_t DiffusionType;
     // POCS TV iteration number
     uint32_t POCS_NgradIter;
+    // Number of detector-indexed normalization images
+    uint32_t normZ = 1;
     // Number of slices in mask images
     uint32_t maskFPZ = 1;
     uint32_t maskBPZ = 1;
@@ -892,7 +894,7 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
         if (inputScalars.useHelical)
             inputScalars.helicalRadius = options.helicalRadius;
     }
-	else if (inputScalars.SPECT && (inputScalars.projector_type == 1 || inputScalars.projector_type == 2 || inputScalars.projector_type == 22 || inputScalars.projector_type == 11)) {
+	else if (inputScalars.SPECT && (inputScalars.projector_type == 1 || inputScalars.projector_type == 2 || inputScalars.projector_type == 3 || inputScalars.projector_type == 22 || inputScalars.projector_type == 11 || inputScalars.projector_type == 13 || inputScalars.projector_type == 23 || inputScalars.projector_type == 33 || inputScalars.projector_type == 31 || inputScalars.projector_type == 32)) {
         inputScalars.nColsD = options.nColsD;
         inputScalars.nRowsD = options.nRowsD;
         inputScalars.coneOfResponseStdCoeffA = options.coneOfResponseStdCoeffA;
@@ -950,6 +952,9 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
         w_vec.maskFP = options.maskFP;
         inputScalars.maskFPZ = options.maskFPZ;
     }
+    if (inputScalars.normalization_correction) {
+        inputScalars.normZ = options.normZ;
+    }
     if (inputScalars.maskBP) {
         w_vec.maskBP = options.maskBP;
         inputScalars.maskBPZ = options.maskBPZ;
@@ -961,23 +966,20 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
     else if (inputScalars.maskBP)
         w_vec.maskPrior = options.maskBP;
     // CT-related variables such as number of projection images
+    w_vec.nProjections = options.nProjections;
     if (inputScalars.CT) {
-        w_vec.nProjections = options.nProjections;
         w_vec.dPitchX = options.dPitchX;
         w_vec.dPitchY = options.dPitchY;
     } else if (inputScalars.SPECT) {
-        w_vec.nProjections = options.nProjections;
 		w_vec.dPitchX = options.dPitchX;
 		w_vec.dPitchY = options.dPitchY;
-		if (inputScalars.projector_type == 1 || inputScalars.projector_type == 2 || inputScalars.projector_type == 22 || inputScalars.projector_type == 11) {
+		if (inputScalars.FPType == 1 || inputScalars.FPType == 2 || inputScalars.FPType == 3 || inputScalars.BPType == 1 || inputScalars.BPType == 2 || inputScalars.BPType == 3) {
 			w_vec.rayShiftsDetector = options.rayShiftsDetector;
 			w_vec.rayShiftsSource = options.rayShiftsSource;
 			w_vec.detectorVector = options.detectorVector;
 		}
     } else {
-        w_vec.nProjections = options.nProjections;
-        // Detector pitch
-        w_vec.dPitchX = options.cr_p;
+        w_vec.dPitchX = options.cr_p; // Detector pitch
         w_vec.dPitchY = options.cr_pz;
     }
     if (inputScalars.FPType == 4 || inputScalars.BPType == 4)

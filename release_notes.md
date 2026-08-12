@@ -13,6 +13,14 @@ New features:
   - SPECT only, no corrections (yet)
   - See PyTorch examples
 - Metal support for reconstructions with ArrayFire backend (both Python and MATLAB)
+- Memory optimization for SPECT
+  - These arrays can now be input as size nRowsD * nColsD * nHeads (one image for each detector head):
+    - FP mask
+    - BP mask
+    - Normalization image / detector uniformity image
+  - These arrays have to be input as size nRowsD * nColsD * nHeads (one image for each detector head):
+    - rayShiftsSource
+    - rayShiftsDetector
 
 Bug fixes:
 - Fixed texture input for standalone Metal projector calls

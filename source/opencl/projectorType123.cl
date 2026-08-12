@@ -161,7 +161,6 @@ void projectorType123(
 #if defined(SPECT)
 	const CLGLOBAL float* CLRESTRICT d_rayShiftsDetector,
 	const CLGLOBAL float* CLRESTRICT d_rayShiftsSource,
-	const CLGLOBAL uint* CLRESTRICT d_detectorVector,
     const float coneOfResponseStdCoeffA,
     const float coneOfResponseStdCoeffB,
     const float coneOfResponseStdCoeffC,
@@ -285,6 +284,9 @@ void projectorType123(
 #else
 	CLGLOBAL float* d_output,
 #endif
+#if defined(SPECT)
+	const CLGLOBAL uint* CLRESTRICT d_detectorVector,
+#endif
 	///////////////////////// END FORWARD OR BACKWARD PROJECTIONS /////////////////////////
 	const uchar no_norm, const ULONG m_size, const uint currentSubset, const int aa
 #endif ///////////////////// END OPENCL/CUDA/METAL /////////////////////
@@ -336,7 +338,18 @@ void projectorType123(
     const FLOAT3 totalFOVmax = make_float3(totalFOVxmax, totalFOVymax, totalFOVzmax);
 #endif
 #endif
+#if defined(SPECT) && (defined(MASKFPBYDETECTOR) || defined(NORMBYDETECTOR))
+    const uint detectorHead = d_detectorVector[i.z];
+#endif
 #ifdef MASKFP // FP mask
+ #ifdef MASKFPBYDETECTOR
+  #ifdef USEIMAGES
+    typeT maskInd = i;
+    maskInd.z = detectorHead;
+  #else
+    const typeT maskInd = i.x + i.y * d_size_x + detectorHead * d_size_x * d_sizey;
+  #endif
+ #else
     const typeT maskInd = i
 #ifndef USEIMAGES
     .x + i.y * d_size_x
@@ -345,6 +358,7 @@ void projectorType123(
 #endif
 #endif
     ;
+ #endif
 	if (readMaskFP(maskFP, maskInd) == 0)
 		return;
 #endif // End FP mask
@@ -393,7 +407,11 @@ void projectorType123(
 	FLOAT local_scat = FLOAT_ZERO;
 
 #ifdef NORM // Normalization included
-	local_norm = d_norm[idx];
+	#ifdef NORMBYDETECTOR
+		local_norm = d_norm[i.x + i.y * d_size_x + detectorHead * d_size_x * d_sizey];
+	#else
+		local_norm = d_norm[idx];
+	#endif
 #endif
 #ifdef SCATTER // Scatter data included
 	local_scat = d_scat[idx];

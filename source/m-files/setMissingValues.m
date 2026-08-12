@@ -1034,6 +1034,9 @@ end
 if ~isfield(options, 'FISTAType')
     options.FISTAType = 0;
 end
+if ~isfield(options,'normZ')
+    options.normZ = 1;
+end
 if ~isfield(options,'maskFPZ')
     options.maskFPZ = 1;
 end

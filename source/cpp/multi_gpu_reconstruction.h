@@ -62,6 +62,7 @@ inline void reconstruction_multigpu(const float* z_det, const float* x, scalarSt
 		const size_t vecSize = ((inputScalars.PET || inputScalars.CT || inputScalars.SPECT) && inputScalars.listmode == 0)
 			? static_cast<size_t>(inputScalars.nRowsD) * static_cast<size_t>(inputScalars.nColsD) : 1ULL;
 		const size_t lastMeas = static_cast<size_t>(pituus[inputScalars.subsetsUsed]) * vecSize;
+		const bool normalizationIndexedData = inputScalars.SPECT && inputScalars.normZ == inputScalars.nHeads;
 		bool bad = false;
 		auto checkSize = [&](const char* name, const size_t have, const size_t need) {
 			if (have < need) {
@@ -78,7 +79,7 @@ inline void reconstruction_multigpu(const float* z_det, const float* x, scalarSt
 			checkSize("maskBP", inputScalars.size_maskBP, static_cast<size_t>(inputScalars.Nx[0]) * static_cast<size_t>(inputScalars.Ny[0]) *
 				static_cast<size_t>(inputScalars.maskBPZ));
 		if (inputScalars.normalization_correction && inputScalars.size_norm > 1ULL)
-			checkSize("normalization", inputScalars.size_norm, lastMeas);
+			checkSize("normalization", inputScalars.size_norm, normalizationIndexedData ? static_cast<size_t>(inputScalars.nRowsD) * static_cast<size_t>(inputScalars.nColsD) * static_cast<size_t>(inputScalars.nHeads) : lastMeas);
 		if (inputScalars.attenuation_correction) {
 			if (inputScalars.CTAttenuation)
 				checkSize("attenuation image", inputScalars.size_atten, static_cast<size_t>(inputScalars.im_dim[0]));

@@ -54,6 +54,25 @@ def _initialize_coordinate_buffers(self, upload):
         else:
             self.d_z[timestep][0] = upload(np.zeros(1, dtype=np.float32))
 
+
+def _initialize_detector_vector_buffers(self, upload, empty=None):
+    """Create detector-head-index buffers aligned with each frame/subset geometry slice."""
+    self.d_detectorVector = [[empty] * self.subsets for _ in range(self.Nt)]
+    if not self.SPECT:
+        return
+    frames = getattr(self, 'DetectorVectorFrames', None)
+    if not isinstance(frames, list) or len(frames) != self.Nt:
+        frames = [np.asarray(self.DetectorVector, dtype=np.uint32).reshape(-1)] * self.Nt
+    for timestep in range(self.Nt):
+        frame = np.asarray(frames[timestep], dtype=np.uint32).reshape(-1)
+        offsets = np.concatenate(([0], np.cumsum(self.nProjSubset[timestep], dtype=np.int64)))
+        if frame.size != int(offsets[-1]):
+            raise ValueError('DetectorVector does not match the reordered projections in a SPECT timeframe.')
+        for subset in range(self.subsets):
+            self.d_detectorVector[timestep][subset] = upload(
+                frame[int(offsets[subset]) : int(offsets[subset + 1])]
+            )
+
 def computeGeom5(x, uv, nRowsD, nColsD, dPitchY, pitch):
     """
     Precompute the per-projection geometry used by the branchless distance-driven
@@ -88,6 +107,7 @@ def computeGeom5(x, uv, nRowsD, nColsD, dPitchY, pitch):
     return np.ascontiguousarray(geom).ravel()
 
 def initProjector(self):
+    self.CTAttenuation = self.CT_attenuation # TODO: consistent CT_attenuation vs CTAttenuation?
     try:
         import arrayfire as af
     except ModuleNotFoundError:
@@ -389,6 +409,10 @@ def initProjector(self):
             bOpt += ('-DMASKFP',)
             if self.maskFPZ > 1:
                 bOpt += ('-DMASKFP3D',)
+        if self.SPECT and self.maskFPZ == self.nHeads:
+            bOpt += ('-DMASKFPBYDETECTOR',)
+        if self.normalization_correction and self.SPECT and self.normZ == self.nHeads:
+            bOpt += ('-DNORMBYDETECTOR',)
         if self.useMaskBP:
             bOpt += ('-DMASKBP',)
             if self.maskBPZ > 1:
@@ -604,8 +628,15 @@ def initProjector(self):
                     else:
                         chl = cp.cuda.texture.ChannelFormatDescriptor(8,0,0,0, cp.cuda.runtime.cudaChannelFormatKindUnsigned)
                         self.maskFP = self.maskFP.ravel('F')
-                        if self.maskFPZ > 1:
-                            self.d_maskFP = [] * self.subsets
+                        if self.SPECT and self.maskFPZ > 1 and self.maskFPZ == self.nHeads:
+                            array = cp.cuda.texture.CUDAarray(chl, self.nRowsD, self.nColsD, self.nHeads)
+                            array.copy_from(self.maskFP.reshape((self.nHeads, self.nColsD, self.nRowsD)))
+                            res = cp.cuda.texture.ResourceDescriptor(cp.cuda.runtime.cudaResourceTypeArray, cuArr=array)
+                            tdes= cp.cuda.texture.TextureDescriptor(addressModes=(cp.cuda.runtime.cudaAddressModeClamp, cp.cuda.runtime.cudaAddressModeClamp,cp.cuda.runtime.cudaAddressModeClamp),
+                                                                    filterMode=cp.cuda.runtime.cudaFilterModePoint, normalizedCoords=0)
+                            self.d_maskFP = cp.cuda.texture.TextureObject(res, tdes)
+                        elif self.maskFPZ > 1:
+                            self.d_maskFP = [None] * self.subsets
                             for i in range(self.subsets):
                                 array = cp.cuda.texture.CUDAarray(chl, self.nRowsD, self.nColsD, self.nMeas[i])
                                 self.maskFP = self.maskFP.reshape((self.nMeas[i], self.nColsD, self.nRowsD))
@@ -644,16 +675,19 @@ def initProjector(self):
                         self.d_maskBP = cp.cuda.texture.TextureObject(res, tdes)
                 if self.TOF:
                     self.d_TOFCenter = cp.asarray(self.TOFCenter)
+                _initialize_detector_vector_buffers(self, lambda value: cp.asarray(value))
                 if self.SPECT:
                     self.d_rayShiftsDetector = cp.asarray(self.rayShiftsDetector)
                     self.d_rayShiftsSource = cp.asarray(self.rayShiftsSource)
-                    self.d_detectorVector = cp.asarray(np.asarray(self.DetectorVector, dtype=np.uint32))
                 if (self.BPType == 2 or self.BPType == 3 or self.FPType == 2 or self.FPType == 3):
                     self.d_V = cp.asarray(self.V)
                 if (self.normalization_correction):
                     self.d_norm = [None] * self.subsets
                     for i in range(self.subsets):
-                        self.d_norm[i] = cp.asarray(self.normalization[self.nTotMeas[i].item() : self.nTotMeas[i + 1].item()])
+                        if self.SPECT and self.normZ == self.nHeads:
+                            self.d_norm[i] = cp.asarray(self.normalization)
+                        else:
+                            self.d_norm[i] = cp.asarray(self.normalization[self.nTotMeas[i].item() : self.nTotMeas[i + 1].item()])
                 if (self.additionalCorrection):
                     self.d_corr = [None] * self.subsets
                     for i in range(self.subsets):
@@ -706,7 +740,7 @@ def initProjector(self):
                 if self.FPType in [1, 2, 3]:
                     self.kIndF = (cp.float32(self.global_factor), cp.float32(self.epps), cp.uint32(self.nRowsD), cp.uint32(self.det_per_ring), cp.float32(self.sigma_x),)
                     if self.SPECT:
-                        self.kIndF += (self.d_rayShiftsDetector, self.d_rayShiftsSource, self.d_detectorVector, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.totalFOVxmin), cp.float32(self.totalFOVymin), cp.float32(self.totalFOVzmin), cp.float32(self.totalFOVxmax), cp.float32(self.totalFOVymax), cp.float32(self.totalFOVzmax),)
+                        self.kIndF += (self.d_rayShiftsDetector, self.d_rayShiftsSource, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.totalFOVxmin), cp.float32(self.totalFOVymin), cp.float32(self.totalFOVzmin), cp.float32(self.totalFOVxmax), cp.float32(self.totalFOVymax), cp.float32(self.totalFOVzmax),)
                     self.kIndF += (cp.float32(self.dPitchX),cp.float32(self.dPitchY),)
                 elif self.FPType == 4:
                     self.kIndF = (cp.uint32(self.nRowsD), cp.uint32(self.nColsD), cp.float32(self.dPitchX),cp.float32(self.dPitchY),cp.float32(self.dL),cp.float32(self.global_factor),)
@@ -741,7 +775,7 @@ def initProjector(self):
                 if self.BPType in [1, 2, 3]:
                     self.kIndB = (cp.float32(self.global_factor), cp.float32(self.epps), cp.uint32(self.nRowsD), cp.uint32(self.det_per_ring), cp.float32(self.sigma_x),)
                     if self.SPECT:
-                        self.kIndB += (self.d_rayShiftsDetector, self.d_rayShiftsSource, self.d_detectorVector, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.totalFOVxmin), cp.float32(self.totalFOVymin), cp.float32(self.totalFOVzmin), cp.float32(self.totalFOVxmax), cp.float32(self.totalFOVymax), cp.float32(self.totalFOVzmax),)
+                        self.kIndB += (self.d_rayShiftsDetector, self.d_rayShiftsSource, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.totalFOVxmin), cp.float32(self.totalFOVymin), cp.float32(self.totalFOVzmin), cp.float32(self.totalFOVxmax), cp.float32(self.totalFOVymax), cp.float32(self.totalFOVzmax),)
                     self.kIndB += (cp.float32(self.dPitchX),cp.float32(self.dPitchY),)
                     if self.BPType in [2, 3]:
                         if self.BPType == 2:
@@ -832,14 +866,19 @@ def initProjector(self):
                 else:
                     self.d_atten = cl.array.to_device(self.queue, self.vaimennus)
                 # self.d_atten = cl.image_from_array(self.clctx, np.reshape(self.vaimennus, (self.Nx[0].item(), self.Ny[0].item(), self.Nz[0].item()), order='F'))
+            _initialize_detector_vector_buffers(self, lambda value: cl.array.to_device(self.queue, value))
             if self.SPECT:
                 self.d_rayShiftsDetector = cl.array.to_device(self.queue, self.rayShiftsDetector)
                 self.d_rayShiftsSource = cl.array.to_device(self.queue, self.rayShiftsSource)
-                self.d_detectorVector = cl.array.to_device(self.queue, np.asarray(self.DetectorVector, dtype=np.uint32))
             if self.useMaskFP:
                 imformat = cl.ImageFormat(cl.channel_order.A, cl.channel_type.UNSIGNED_INT8)
-                if self.maskFPZ > 1:
-                    self.d_maskFP = [] * self.subsets
+                if self.SPECT and self.maskFPZ > 1 and self.maskFPZ == self.nHeads:
+                    if VERSION[0] > 2024 or (VERSION[0] == 2024 and VERSION[1] > 2):
+                        self.d_maskFP = cl.create_image(self.clctx, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, imformat, hostbuf=self.maskFP, shape=(self.nRowsD, self.nColsD, self.nHeads))
+                    else:
+                        self.d_maskFP = cl.Image(self.clctx, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, imformat, hostbuf=self.maskFP, shape=(self.nRowsD, self.nColsD, self.nHeads))
+                elif self.maskFPZ > 1:
+                    self.d_maskFP = [None] * self.subsets
                     for i in range(self.subsets):
                         if VERSION[0] > 2024 or (VERSION[0] == 2024 and VERSION[1] > 2):
                             self.d_maskFP[i] = cl.create_image(self.clctx, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, imformat, hostbuf=self.maskFP, shape=(self.nRowsD, self.nColsD, self.nMeas[i]))
@@ -871,7 +910,10 @@ def initProjector(self):
             if (self.normalization_correction):
                 self.d_norm = [None] * self.subsets
                 for i in range(self.subsets):
-                    self.d_norm[i] = cl.array.to_device(self.queue, self.normalization[self.nTotMeas[i].item() : self.nTotMeas[i + 1].item()])
+                    if self.SPECT and self.normZ == self.nHeads:
+                        self.d_norm[i] = cl.array.to_device(self.queue, self.normalization)
+                    else:
+                        self.d_norm[i] = cl.array.to_device(self.queue, self.normalization[self.nTotMeas[i].item() : self.nTotMeas[i + 1].item()])
             if (self.additionalCorrection):
                 self.d_corr = [None] * self.subsets
                 for i in range(self.subsets):
@@ -950,8 +992,6 @@ def initProjector(self):
                     self.knlF.set_arg(self.kIndF, self.d_rayShiftsDetector.data)
                     self.kIndF += 1
                     self.knlF.set_arg(self.kIndF, self.d_rayShiftsSource.data)
-                    self.kIndF += 1
-                    self.knlF.set_arg(self.kIndF, self.d_detectorVector.data)
                     self.kIndF += 1
                     self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.coneOfResponseStdCoeffA))
                     self.kIndF += 1
@@ -1040,8 +1080,6 @@ def initProjector(self):
                     self.knlB.set_arg(self.kIndB, self.d_rayShiftsDetector.data)
                     self.kIndB += 1
                     self.knlB.set_arg(self.kIndB, self.d_rayShiftsSource.data)
-                    self.kIndB += 1
-                    self.knlB.set_arg(self.kIndB, self.d_detectorVector.data)
                     self.kIndB += 1
                     self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.coneOfResponseStdCoeffA))
                     self.kIndB += 1

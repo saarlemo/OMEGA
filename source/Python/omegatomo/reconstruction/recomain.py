@@ -104,6 +104,7 @@ def transferData(options):
     options.param.FluxType = ctypes.c_uint32(options.FluxType)
     options.param.DiffusionType = ctypes.c_uint32(options.DiffusionType)
     options.param.POCS_NgradIter = ctypes.c_uint32(options.POCS_NgradIter)
+    options.param.normZ = ctypes.c_uint32(options.normZ)
     options.param.maskFPZ = ctypes.c_uint32(options.maskFPZ)
     options.param.maskBPZ = ctypes.c_uint32(options.maskBPZ)
     options.param.FISTAType = ctypes.c_uint32(options.FISTAType)

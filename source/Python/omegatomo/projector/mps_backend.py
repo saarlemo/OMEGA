@@ -365,8 +365,13 @@ def _upload_static_buffers(self: Any, torch: Any) -> None:
     self.dummy_buffer = self.mps_empty_float32
     self.d_Sens = torch.zeros(1, dtype=torch.float32, device='mps')
 
-    from .init import _initialize_coordinate_buffers
+    from .init import _initialize_coordinate_buffers, _initialize_detector_vector_buffers
     _initialize_coordinate_buffers(self, lambda value: _mps_tensor_from_numpy(torch, value, np.float32))
+    _initialize_detector_vector_buffers(
+        self,
+        lambda value: _mps_tensor_from_numpy(torch, value, np.uint32),
+        self.mps_empty_uint32,
+    )
     if getattr(self, 'listmode', 0) > 0 and not getattr(self, 'useIndexBasedReconstruction', False) and not getattr(self, 'loadTOF', False):
         x = np.asarray(self.x, dtype=np.float32).ravel(order='F')
         self.d_x = [[self.mps_empty_float32] * self.subsets for _ in range(self.Nt)]
@@ -381,7 +386,6 @@ def _upload_static_buffers(self: Any, torch: Any) -> None:
 
     self.d_rayShiftsDetector = _mps_tensor_from_numpy(torch, getattr(self, 'rayShiftsDetector', np.empty(0)), np.float32) if not _empty_value(getattr(self, 'rayShiftsDetector', np.empty(0))) else self.mps_empty_float32
     self.d_rayShiftsSource = _mps_tensor_from_numpy(torch, getattr(self, 'rayShiftsSource', np.empty(0)), np.float32) if not _empty_value(getattr(self, 'rayShiftsSource', np.empty(0))) else self.mps_empty_float32
-    self.d_detectorVector = _mps_tensor_from_numpy(torch, np.asarray(self.DetectorVector, dtype=np.uint32), np.uint32) if getattr(self, 'SPECT', False) and not _empty_value(getattr(self, 'DetectorVector', np.empty(0))) else self.mps_empty_uint32
     self.d_TOFCenter = _mps_tensor_from_numpy(torch, getattr(self, 'TOFCenter', np.empty(0)), np.float32) if not _empty_value(getattr(self, 'TOFCenter', np.empty(0))) else self.mps_empty_float32
     self.d_V = _mps_tensor_from_numpy(torch, getattr(self, 'V', np.empty(0)), np.float32) if not _empty_value(getattr(self, 'V', np.empty(0))) else self.mps_empty_float32
 
@@ -416,8 +420,11 @@ def _upload_static_buffers(self: Any, torch: Any) -> None:
             projection_stop = self.nMeas[index + 1]
             if measurement_attenuation.size:
                 self.d_attenuation[timestep][subset] = _mps_tensor_from_numpy(torch, measurement_attenuation[measurement_start:measurement_stop], np.float32)
-            if normalization.size:
-                self.d_norm[timestep][subset] = _mps_tensor_from_numpy(torch, normalization[measurement_start:measurement_stop], np.float32)
+            if normalization.size and getattr(self, 'normalization_correction', False):
+                if getattr(self, 'SPECT', False) and int(getattr(self, 'normZ', 1)) == int(getattr(self, 'nHeads', 1)):
+                    self.d_norm[timestep][subset] = _mps_tensor_from_numpy(torch, normalization, np.float32)
+                else:
+                    self.d_norm[timestep][subset] = _mps_tensor_from_numpy(torch, normalization[measurement_start:measurement_stop], np.float32)
             if corr_vector.size:
                 self.d_scatter[timestep][subset] = _mps_tensor_from_numpy(torch, corr_vector[measurement_start:measurement_stop], np.float32)
             if offset_limit.size:
@@ -446,7 +453,9 @@ def _upload_static_buffers(self: Any, torch: Any) -> None:
         frame_stride = int(self.nRowsD * self.nColsD)
         for timestep in range(self.Nt):
             for subset in range(self.subsets):
-                if int(getattr(self, 'maskFPZ', 1)) > 1:
+                if getattr(self, 'SPECT', False) and int(getattr(self, 'maskFPZ', 1)) == int(getattr(self, 'nHeads', 1)):
+                    values = mask_fp
+                elif int(getattr(self, 'maskFPZ', 1)) > 1:
                     index = timestep * self.subsets + subset
                     start = self.nMeas[index] * frame_stride
                     stop = self.nMeas[index + 1] * frame_stride
@@ -534,16 +543,11 @@ def _kernel_args(
 ) -> list[Any]:
     """Bind every Metal resource slot, using typed empty buffers when inactive."""
     empty_f = self.mps_empty_float32
-    empty_u8 = self.mps_empty_uint8
-    empty_u16 = self.mps_empty_uint16
-    empty_u32 = self.mps_empty_uint32
     atten = self.d_attenuation_image if getattr(self, 'CTAttenuation', False) else self.d_attenuation[timestep][subset]
-    args = [empty_f] * (22 if getattr(self, 'SPECT', False) else 21)
+    args = [empty_f] * 22
     args[0] = scalar_params
     args[1] = self.d_rayShiftsDetector
     args[2] = self.d_rayShiftsSource
-    if getattr(self, 'SPECT', False):
-        args[21] = self.d_detectorVector
     args[3] = self.d_TOFCenter
     args[4] = self.d_V
     args[5] = atten
@@ -562,6 +566,7 @@ def _kernel_args(
     args[18] = self.d_L[timestep][subset]
     args[19] = dynamic_input
     args[20] = output
+    args[21] = self.d_detectorVector[timestep][subset]
     if direction == 'forward' and int(self.FPType) not in (1, 2, 3):
         raise ValueError(f'Unsupported Metal/MPS forward projector type: {self.FPType}')
     if direction == 'backward' and int(self.BPType) not in (1, 2, 3):
@@ -577,7 +582,7 @@ def _kernel_args(
         args4[6] = _geometry_buffer(self, 'z', timestep, subset)
         args4[7] = self.d_Sens
         args4[8] = self.d_norm[timestep][subset]
-        args4[9] = self.d_maskBP if getattr(self, 'useMaskBP', False) else empty_u8
+        args4[9] = self.d_maskBP
         return args4
     return args
 
