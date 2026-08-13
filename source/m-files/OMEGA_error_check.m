@@ -67,7 +67,7 @@ if options.SPECT
         else
             nHeads = 1;
         end
-        compactRayShiftSize = 2 * double(options.nRays) * double(options.nRowsD) * ...
+        compactRayShiftSize = 2 * double(options.n_rays_transaxial) * double(options.n_rays_axial) * double(options.nRowsD) * ...
             double(options.nColsD) * nHeads;
 
         detectorSize = numel(options.rayShiftsDetector);
@@ -115,7 +115,7 @@ end
 if options.SPECT && mod(sqrt(options.nRays), 1) ~= 0
     error('With SPECT, options.nRays has to be a square')
 end
-if options.SPECT && ismember(options.projector_type, [2, 12, 21, 22]) && options.nRays > 1
+if options.SPECT && ismember(options.projector_type, [2, 12, 21, 22]) && options.n_rays_transaxial * options.n_rays_axial > 1
     warning('Orthogonal distance ray tracer should be used with 1 ray.')
 end
 if options.only_sinos && options.only_reconstructions
@@ -831,9 +831,6 @@ if options.verbose > 0
                 else
                     aray = 'ray';
                 end
-                if options.SPECT
-                    disp(['Improved Siddon''s algorithm selected with ' num2str(options.n_rays_transaxial) ' ' ray '.'])
-                else
                     disp(['Improved Siddon''s algorithm selected with ' num2str(options.n_rays_transaxial) ' transaxial ' ray ' and ' ...
                     num2str(options.n_rays_axial) ' axial ' aray '.'])
                 end

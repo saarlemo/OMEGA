@@ -3261,10 +3261,10 @@ public:
 				memAlloc.zFull = true;
 			}
 			if (inputScalars.SPECT) {
-				ALLOC_BUFFER(d_rayShiftsDetector, CL_MEM_READ_ONLY, sizeof(float) * 2 * inputScalars.n_rays * inputScalars.nRowsD * 
+				ALLOC_BUFFER(d_rayShiftsDetector, CL_MEM_READ_ONLY, sizeof(float) * 2 * inputScalars.n_rays * inputScalars.n_rays3D * inputScalars.nRowsD *
 					inputScalars.nColsD * inputScalars.nHeads);
 				CHECK(status, "\n", (STATUS_t)(-1));
-				ALLOC_BUFFER(d_rayShiftsSource, CL_MEM_READ_ONLY, sizeof(float) * 2 * inputScalars.n_rays * inputScalars.nRowsD * 
+				ALLOC_BUFFER(d_rayShiftsSource, CL_MEM_READ_ONLY, sizeof(float) * 2 * inputScalars.n_rays * inputScalars.n_rays3D * inputScalars.nRowsD *
 					inputScalars.nColsD * inputScalars.nHeads);
 				CHECK(status, "\n", (STATUS_t)(-1));
 				memAlloc.rayShifts = true;
@@ -3541,7 +3541,7 @@ public:
 				memSize += (sizeof(float) * inputScalars.nBins);
 			}
 			if (inputScalars.SPECT) {
-				const size_t rayShiftSize = static_cast<size_t>(2) * inputScalars.n_rays * inputScalars.nRowsD * inputScalars.nColsD * inputScalars.nHeads;
+				const size_t rayShiftSize = static_cast<size_t>(2) * inputScalars.n_rays * inputScalars.n_rays3D * inputScalars.nRowsD * inputScalars.nColsD * inputScalars.nHeads;
 				WRITE_BUFFER(d_rayShiftsDetector, sizeof(float) * rayShiftSize, w_vec.rayShiftsDetector);
 				CHECK(status, "\n", (STATUS_t)(-1));
 				memSize += sizeof(float) * rayShiftSize;

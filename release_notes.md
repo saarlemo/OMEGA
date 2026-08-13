@@ -18,9 +18,12 @@ New features:
     - FP mask
     - BP mask
     - Normalization image / detector uniformity image
-  - These arrays have to be input as size nRowsD * nColsD * nHeads (one image for each detector head):
+  - These arrays have to be input as size 2 * n_rays_transaxial * n_rays_axial x nRowsD x nColsD x nHeads (one image for each detector head):
     - rayShiftsSource
     - rayShiftsDetector
+- SPECT multi-ray projector now uses ```options.n_rays_transaxial``` and ```options.n_rays_axial``` as used in sinogram reconstructions with other modalities
+  - The old ```options.nRays``` is still supported, but not recommended to use.
+  - ```options.nRays=n^2``` converts silently into values of ```options.n_rays_transaxial=n``` and ```options.n_rays_axial=n```
 
 Bug fixes:
 - Fixed texture input for standalone Metal projector calls

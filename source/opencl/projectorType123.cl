@@ -440,8 +440,6 @@ void projectorType123(
 			for (int to = 0; to < NBINS; to++)
 				axRay[to] = 0.f;
 #endif
-#elif defined(SPECT)
-	const int lorXY = 0;
 #endif  //////////////// END MULTIRAY ////////////////
 	FLOAT3 s, d;
 #if defined(NLAYERS) && !defined(LISTMODE)
@@ -454,7 +452,7 @@ void projectorType123(
 #if defined(CT) && !defined(LISTMODE) && !defined(PET) // CT data
 	getDetectorCoordinatesCT(d_xy, d_z, &s, &d, i, d_size_x, d_sizey, crystalSize);
 #elif defined(SPECT) && (!defined(LISTMODE) || defined(SENS)) && !defined(PET) // SPECT data
-	getDetectorCoordinatesSPECT(d_xy, d_z, &s, &d, i, d_size_x, d_sizey, crystalSize, d_rayShiftsDetector, d_rayShiftsSource, d_detectorVector, lorXY, totalFOVmin, totalFOVmax);
+	getDetectorCoordinatesSPECT(d_xy, d_z, &s, &d, i, d_size_x, d_sizey, crystalSize, d_rayShiftsDetector, d_rayShiftsSource, d_detectorVector, lor, totalFOVmin, totalFOVmax);
 #elif defined(LISTMODE) && !defined(SENS) // Listmode data
 #if defined(INDEXBASED)
 	getDetectorCoordinatesListmode(d_xy, d_z, trIndex, axIndex, &s, &d, idx

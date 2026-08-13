@@ -897,8 +897,9 @@ def sinogramCoordinates3D(options, layers = (1,1)):
 
 def SPECTParameters(options: proj.projectorClass):
     if options.projector_type in [1, 11, 12, 2, 21, 22]: # Ray tracing projectors
+        nRays = int(options.n_rays_transaxial * options.n_rays_axial)
         if options.rayShiftsDetector.size == 0: # Collimator modeling
-            options.rayShiftsDetector = np.zeros((2*options.nRays, options.nRowsD, options.nColsD, options.nHeads), dtype=np.float32)
+            options.rayShiftsDetector = np.zeros((2*nRays, options.nRowsD, options.nColsD, options.nHeads), dtype=np.float32)
             
             if options.colFxy == 0 and options.colFz == 0:
                 dx = np.linspace(-(options.nRowsD / 2 - 0.5) * options.dPitchX, (options.nRowsD / 2 - 0.5) * options.dPitchX, options.nRowsD)
@@ -906,16 +907,18 @@ def SPECTParameters(options: proj.projectorClass):
                 
                 for ii in range(options.nRowsD):
                     for jj in range(options.nColsD):
-                        for kk in range(options.nRays):
+                        for kk in range(nRays):
                             options.rayShiftsDetector[2 * kk, ii, jj, :] = -dx[ii]
                             options.rayShiftsDetector[2 * kk + 1, ii, jj, :] = -dy[jj]    
 
         if options.rayShiftsSource.size == 0:
-            options.rayShiftsSource = np.zeros((2*options.nRays, options.nRowsD, options.nColsD, options.nHeads), dtype=np.float32)
+            options.rayShiftsSource = np.zeros((2*nRays, options.nRowsD, options.nColsD, options.nHeads), dtype=np.float32)
             
-            if options.nRays > 1: # Multiray shifts
-                nRays = int(np.sqrt(options.nRays))
-                tmp_x, tmp_y = np.meshgrid(np.linspace(-0.5, 0.5, nRays), np.linspace(-0.5, 0.5, nRays))
+            if nRays > 1: # Multiray shifts
+                tmp_x, tmp_y = np.meshgrid(
+                    np.linspace(-0.5, 0.5, options.n_rays_transaxial),
+                    np.linspace(-0.5, 0.5, options.n_rays_axial)
+                )
                 if options.colFxy == 0 and options.colFz == 0: # Pinhole collimator
                     tmp_x *= options.dPitchX
                     tmp_y *= options.dPitchY
@@ -925,7 +928,7 @@ def SPECTParameters(options: proj.projectorClass):
 
                 tmp_shift = np.column_stack((tmp_x.ravel(), tmp_y.ravel())).T.reshape(-1, 1, order='F')
 
-                for kk in range(options.nRays):
+                for kk in range(nRays):
                     options.rayShiftsSource[2 * kk, :, :, :] = tmp_shift[2 * kk]
                     options.rayShiftsSource[2 * kk + 1, :, :, :] = tmp_shift[2 * kk + 1]
 

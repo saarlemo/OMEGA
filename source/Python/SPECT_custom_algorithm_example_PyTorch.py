@@ -192,11 +192,12 @@ options.colFz = np.inf
 # 4. For the Siddon ray tracer, the CDRF is defined by shifting the rays to
 # the shape of the collimator hole. The values of rayShiftsDetector and
 # rayShiftsSource represent [shift1XY, shift1Z, shift2XY, ...] in mm. Size
-# should be 2*nRays x nColsD x nRowsD x nProjections. If not input, values
+# should be 2*n_rays_axial*n_rays_transaxial x nColsD x nRowsD x nHeads. If not input, values
 # are calculated automatically.
-options.nRays = 1  # Number of rays traced per detector element
-# options.rayShiftsDetector = np.zeros((2*options.nRays, options.nColsD, options.nRowsD, options.nProjections));
-# options.rayShiftsSource = np.zeros((2*options.nRays, options.nColsD, options.nRowsD, options.nProjections));
+options.n_rays_axial = 1
+options.n_rays_transaxial = 1
+# options.rayShiftsDetector = np.zeros((2*options.n_rays_axial*options.n_rays_transaxial, options.nColsD, options.nRowsD, options.nHeads));
+# options.rayShiftsSource = np.zeros((2*options.n_rays_axial*options.n_rays_transaxial, options.nColsD, options.nRowsD, options.nHeads));
  
 ###########################################################################
 ###########################################################################
