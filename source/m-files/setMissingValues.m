@@ -313,13 +313,17 @@ if ~isfield(options, 'nRays')
 end
 if ~isfield(options, 'n_rays_transaxial')
     if options.SPECT
-        options.n_rays_transaxial = options.nRays;
+        options.n_rays_transaxial = sqrt(options.nRays);
     else
         options.n_rays_transaxial = 1;
     end
 end
 if ~isfield(options, 'n_rays_axial')
-    options.n_rays_axial = 1;
+    if options.SPECT
+        options.n_rays_axial = sqrt(options.nRays);
+    else
+        options.n_rays_axial = 1;
+    end
 end
 if ~isfield(options, 'cpu_to_gpu_factor')
     options.cpu_to_gpu_factor = 1;
@@ -1022,6 +1026,9 @@ end
 if ~isfield(options, 'FISTAType')
     options.FISTAType = 0;
 end
+if ~isfield(options,'normZ')
+    options.normZ = 1;
+end
 if ~isfield(options,'maskFPZ')
     options.maskFPZ = 1;
 end
@@ -1078,6 +1085,9 @@ if ~isfield(options, 'rayShiftsDetector')
 end
 if ~isfield(options, 'rayShiftsSource')
     options.rayShiftsSource = [];
+end
+if ~isfield(options, 'nHeads') || isempty(options.nHeads)
+    options.nHeads = 1;
 end
 if ~isfield(options, 'iR')
     options.iR = 1;

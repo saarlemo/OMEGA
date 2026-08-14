@@ -41,7 +41,13 @@ using INT3_t = int3;
 using UINT2_t = uint2;
 using UCHAR_t = unsigned char;
 using DEVBUFF_t = CUdeviceptr;
+#if !defined(AF)
+// Standalone implementation 5 uses CUDA driver pointers directly. ArrayFire
+// builds retain the pointer-to-device-pointer representation it expects.
+using AFDEVBUFF_t = CUdeviceptr;
+#else
 using AFDEVBUFF_t = CUdeviceptr*;
+#endif
 using TEX2D_t = CUtexObject;
 using TEX3D_t = CUtexObject;
 using TEXARRAY_t = CUarray;
@@ -175,6 +181,15 @@ using TEXARRAY_t = EmptyTextureArray;
 #elif defined(OPENCL)
 #define ALLOC_BUFFER(BUF, FLAGS, SIZE) BUF = cl::Buffer(CLContext, FLAGS, SIZE, NULL, &status)
 #endif
+// Backend-neutral buffer access flags. CUDA and Metal ignore the OpenCL access mode
+// because their allocation APIs do not encode it.
+#if defined(CUDA) || defined(HIP) || defined(METAL)
+#define BACKEND_BUFFER_READ_ONLY 0
+#define BACKEND_BUFFER_READ_WRITE 0
+#elif defined(OPENCL)
+#define BACKEND_BUFFER_READ_ONLY CL_MEM_READ_ONLY
+#define BACKEND_BUFFER_READ_WRITE CL_MEM_READ_WRITE
+#endif
 // Upload SIZE bytes from host SRC into device buffer BUF (non-blocking/asynchronous on OpenCL)
 #if defined(CUDA) || defined(HIP)
 #define WRITE_BUFFER(BUF, SIZE, SRC) status = cuMemcpyHtoD(BUF, SRC, SIZE)
@@ -189,6 +204,21 @@ using TEXARRAY_t = EmptyTextureArray;
 } while(0)
 #elif defined(OPENCL)
 #define WRITE_BUFFER(BUF, SIZE, SRC) status = CLCommandQueue[0].enqueueWriteBuffer(BUF, CL_FALSE, 0, SIZE, SRC)
+#endif
+// Download SIZE bytes from device buffer BUF into host destination DST
+#if defined(CUDA) || defined(HIP)
+#define READ_BUFFER(BUF, SIZE, DST) status = cuMemcpyDtoH((DST), (BUF), (SIZE))
+#elif defined(METAL)
+#define READ_BUFFER(BUF, SIZE, DST) do { \
+	if ((BUF).get() && (BUF)->contents()) { \
+		std::memcpy((DST), (BUF)->contents(), SIZE); \
+		status = SUCCESS_VALUE; \
+	} else { \
+		status = -1; \
+	} \
+} while(0)
+#elif defined(OPENCL)
+#define READ_BUFFER(BUF, SIZE, DST) status = CLCommandQueue[0].enqueueReadBuffer(BUF, CL_FALSE, 0, SIZE, DST)
 #endif
 // Queue/stream synchronization
 #if defined(CUDA) || defined(HIP)
@@ -307,7 +337,6 @@ using TimerPoint = std::chrono::steady_clock::time_point;
 	OCL_CHECK(status, "Image creation failed\n", -1); \
 	status = CLCommandQueue[0].enqueueCopyBufferToImage((SRC), (TEX), 0, origin, textureRegion); \
 	OCL_CHECK(status, "Image copy failed\n", -1); \
-	//FINISH_QUEUE(status, "Queue finish failed after image copy\n", -1); \
 } while(0)
 #define CREATE_FLOAT_TEXTURE3D_EMPTY(TEX, ARRAY, WIDTH, HEIGHT, DEPTH) do { \
 	(TEX) = TEX3D_t(CLContext, CL_MEM_READ_ONLY, format, (WIDTH), (HEIGHT), (DEPTH), 0, 0, NULL, &status); \
@@ -1069,6 +1098,16 @@ class ProjectorClass {
 			ADD_OPT(options, "-DMASKFP");
 			if (inputScalars.maskFPZ > 1)
 				ADD_OPT(options, "-DMASKFP3D");
+		}
+		if (inputScalars.SPECT && inputScalars.maskFPZ == inputScalars.nHeads &&
+			(inputScalars.FPType == 1 || inputScalars.FPType == 2 || inputScalars.FPType == 3 ||
+			 inputScalars.BPType == 1 || inputScalars.BPType == 2 || inputScalars.BPType == 3)) {
+			ADD_OPT(options, "-DMASKFPBYDETECTOR");
+		}
+		if (inputScalars.normalization_correction && inputScalars.SPECT && inputScalars.normZ == inputScalars.nHeads &&
+			(inputScalars.FPType == 1 || inputScalars.FPType == 2 || inputScalars.FPType == 3 ||
+			 inputScalars.BPType == 1 || inputScalars.BPType == 2 || inputScalars.BPType == 3)) {
+			ADD_OPT(options, "-DNORMBYDETECTOR");
 		}
 		if (inputScalars.maskBP) {
 			ADD_OPT(options, "-DMASKBP");
@@ -2061,61 +2100,38 @@ public:
 #endif
 	{}
 
-#if defined(METAL) || defined(OPENCL) // Used for implementations 3 and 5; not supported by CUDA/HIP
 	inline DEVBUFF_t makeDeviceBuffer(const size_t bytes, const UINT64_t flags, STATUS_t& status) {
 		DEVBUFF_t buffer{};
-#if defined(METAL)
-		(void)flags;
-		buffer = NS::TransferPtr(mtlDevice->newBuffer(static_cast<NS::UInteger>(bytes), (MTL::ResourceOptions)MTL::ResourceStorageModeShared));
-		status = buffer.get() ? SUCCESS_VALUE : -1;
-#elif defined(OPENCL)
-		buffer = cl::Buffer(CLContext, static_cast<cl_mem_flags>(flags), bytes, NULL, &status);
-#endif
+		ALLOC_BUFFER(buffer, flags, bytes);
 		return buffer;
 	}
 
 	inline STATUS_t writeDeviceBuffer(DEVBUFF_t& buffer, const void* input, const size_t bytes) {
-#if defined(METAL)
-		if (!buffer || !buffer->contents())
-			return -1;
-		std::memcpy(buffer->contents(), input, bytes);
-		return SUCCESS_VALUE;
-#elif defined(OPENCL)
-		return CLCommandQueue[0].enqueueWriteBuffer(buffer, CL_FALSE, 0, bytes, input);
-#endif
+		STATUS_t status = SUCCESS_VALUE;
+		WRITE_BUFFER(buffer, bytes, input);
+		return status;
 	}
 
 	inline STATUS_t readDeviceBuffer(const DEVBUFF_t& buffer, void* output, const size_t bytes) {
-#if defined(METAL)
-		if (!buffer || !buffer->contents())
-			return -1;
-		std::memcpy(output, buffer->contents(), bytes);
-		return SUCCESS_VALUE;
-#elif defined(OPENCL)
-		return CLCommandQueue[0].enqueueReadBuffer(buffer, CL_FALSE, 0, bytes, output);
-#endif
+		STATUS_t status = SUCCESS_VALUE;
+		READ_BUFFER(buffer, bytes, output);
+		return status;
 	}
 
 	template <typename T>
 	inline STATUS_t fillDeviceBuffer(DEVBUFF_t& buffer, const T value, const size_t bytes) {
-#if defined(METAL)
-		if (!buffer || !buffer->contents())
-			return -1;
-		if (value == static_cast<T>(0)) {
-			std::memset(buffer->contents(), 0, bytes);
-		}
-		else {
-			size_t offset = 0;
-			while (offset + sizeof(T) <= bytes) {
-				std::memcpy(static_cast<unsigned char*>(buffer->contents()) + offset, &value, sizeof(T));
-				offset += sizeof(T);
-			}
-			if (offset < bytes)
-				std::memcpy(static_cast<unsigned char*>(buffer->contents()) + offset, &value, bytes - offset);
-		}
-		return SUCCESS_VALUE;
-#elif defined(OPENCL)
+#if defined(OPENCL)
 		return CLCommandQueue[0].enqueueFillBuffer(buffer, value, 0, bytes);
+#else
+		std::vector<unsigned char> fillData(bytes);
+		for (size_t offset = 0; offset < bytes; offset += sizeof(value)) {
+			const size_t remaining = bytes - offset;
+			const size_t copyBytes = remaining < sizeof(value) ? remaining : sizeof(value);
+			std::memcpy(fillData.data() + offset, &value, copyBytes);
+		}
+		STATUS_t status = SUCCESS_VALUE;
+		WRITE_BUFFER(buffer, bytes, fillData.data());
+		return status;
 #endif
 	}
 
@@ -2124,7 +2140,24 @@ public:
 		FINISH_QUEUE(status, "Queue finish failed\n", status);
 		return status;
 	}
-#endif
+
+	// Create and populate a floating-point 3D texture through the backend-specific
+	// texture compatibility macro. This is also available to future CUDA callers.
+	inline STATUS_t createFloatTexture3DFromHost(TEX3D_t& texture, TEXARRAY_t& array, const float* source,
+		const size_t width, const size_t height, const size_t depth) {
+		STATUS_t status = SUCCESS_VALUE;
+		CREATE_FLOAT_TEXTURE3D_FROM_HOST(texture, array, source, width, height, depth,
+			BACKEND_TEXTURE_POINT, BACKEND_TEXTURE_DEFAULT_FLAGS);
+		return status;
+	}
+
+	inline STATUS_t createFloatTexture3DFromDevice(TEX3D_t& texture, TEXARRAY_t& array, const AFDEVBUFF_t& source,
+		const size_t width, const size_t height, const size_t depth) {
+		STATUS_t status = SUCCESS_VALUE;
+		CREATE_FLOAT_TEXTURE3D_FROM_DEVICE(texture, array, source, width, height, depth,
+			BACKEND_TEXTURE_POINT, BACKEND_TEXTURE_DEFAULT_FLAGS);
+		return status;
+	}
 
 #if defined(METAL)
 	NS::SharedPtr<MTL::Device> mtlDevice;
@@ -2135,6 +2168,10 @@ public:
 #if defined(CUDA) || defined(HIP)
 	std::vector<CUdevice> CUDeviceID;
 	std::vector<CUstream> CLCommandQueue;
+#if !defined(AF)
+	CUcontext standaloneContext = nullptr;
+	CUdevice standaloneDevice = 0;
+#endif
 #elif defined(OPENCL)
 	cl::Context CLContext;
 	std::vector<cl::Device> CLDeviceID;
@@ -2202,6 +2239,7 @@ public:
 	std::vector<AFDEVBUFF_t> d_meas, d_rand, d_imTemp, d_imFinal;
 	// Vector device buffers common to both backends
 	std::vector<std::vector<DEVBUFF_t>> d_maskFPB;
+	std::vector<std::vector<DEVBUFF_t>> d_detectorVector;
 	std::vector<DEVBUFF_t> d_normFull, d_scatFull, d_xFull, d_zFull;
 	std::vector<DEVBUFF_t> d_L;
 	std::vector<DEVBUFF_t> d_zindex, d_xyindex, d_T;
@@ -2355,6 +2393,9 @@ public:
 		if (memAlloc.rayShifts) {
 			getErrorString(cuMemFree(d_rayShiftsDetector));
 			getErrorString(cuMemFree(d_rayShiftsSource));
+			for (auto& perTimestep : d_detectorVector)
+				for (auto& buffer : perTimestep)
+					getErrorString(cuMemFree(buffer));
 		}
 		if (memAlloc.GGMRF) {
 			getErrorString(cuMemFree(d_weights));
@@ -2458,6 +2499,12 @@ public:
 			getErrorString(cuEventDestroy(evSide[kk]));
 		if (evMain != nullptr)
 			getErrorString(cuEventDestroy(evMain));
+#if !defined(AF)
+		if (!CLCommandQueue.empty())
+			getErrorString(cuStreamDestroy(CLCommandQueue[0]));
+		if (standaloneContext != nullptr)
+			getErrorString(cuDevicePrimaryCtxRelease(standaloneDevice));
+#endif
 	}
 #elif defined(OPENCL) || defined(METAL)
 	~ProjectorClass() {}
@@ -2595,20 +2642,12 @@ public:
 		}
 		// Whether the NLM exclusive local memory caching with patch window is used or not
 		bool nlmTileZEmitted = false;
-		// Determine whether the local memory cache can be used
-		// Usually GPUs offer 48 kB of local memory so large neighborhoods and large NVOXELS can cause
-		// the local memory to run out
-		// This would require 12032 or more elements such as 13x13x11 window with NVOXELS = 8
-		// This would be Ndx = Ndy = 6 and Ndz = 5
-		// NLM, however, expands this with Nlx as well
 		// TODO: Decrease NVOXELS if the cache is too big?
 		auto addFastSWLocalCache = [&](const bool anatomical) {
 			if (!FASTNLMLOCALCACHE || anatomical)
 				return;
 			const size_t cacheSize = (local_size[0] + 2ULL * w_vec.Ndx) * (local_size[1] + 2ULL * w_vec.Ndy)
 				* (nVoxZ + 2ULL * w_vec.Ndz) * sizeof(float);
-			// The tile is guaranteed to fit: addProjector disables fastPDHG outright when it would exceed
-			// the 47 kB budget, so there is no texture fallback here any more.
 			ADD_OPT(os_options, "-DFASTSWLOCAL");
 			if (!nlmTileZEmitted) {
 				ADD_OPT_INT(os_options, "-DFASTNLMTILEZ", nVoxZ);
@@ -2654,17 +2693,11 @@ public:
 			ADD_OPT_INT(os_options, "-DPWINDOWX", w_vec.Nlx);
 			ADD_OPT_INT(os_options, "-DPWINDOWY", w_vec.Nly);
 			ADD_OPT_INT(os_options, "-DPWINDOWZ", w_vec.Nlz);
-			// Same as above, but for NLM
-			// The only difference is the inclusion of the patch size Nlx
-			// This means that the larger the patch size, the smaller the search window can be
-			// without risking going out of memory
 			// TODO: Decrease NVOXELS if the cache is too big?
 			if (FASTNLMLOCALCACHE) {
 				const size_t cacheSize = (local_size[0] + 2ULL * (w_vec.Ndx + w_vec.Nlx))
 					* (local_size[1] + 2ULL * (w_vec.Ndy + w_vec.Nly))
 					* (nVoxZ + 2ULL * (w_vec.Ndz + w_vec.Nlz)) * sizeof(float) * (w_vec.NLM_anatomical ? 2ULL : 1ULL);
-				// The tile is guaranteed to fit: addProjector disables fastPDHG outright when it would exceed
-				// the 47 kB budget, so there is no texture fallback here any more.
 				ADD_OPT(os_options, "-DFASTNLMLOCAL");
 				ADD_OPT_INT(os_options, "-DFASTNLMTILEZ", nVoxZ);
 				nlmTileZEmitted = true;
@@ -2776,9 +2809,25 @@ public:
 
 #if defined(CUDA) || defined(HIP)
 		// Create the CUDA/HIP context and stream and assign the device
+#if defined(AF)
 		int af_id = af::getDevice();
 		CUDeviceID.push_back(afcu::getNativeId(af_id));
 		CLCommandQueue.push_back(afcu::getStream(CUDeviceID[0]));
+#else
+		status = cuInit(0);
+		CUDA_CHECK(status, "Failed to initialize CUDA\n", -1);
+		status = cuDeviceGet(&standaloneDevice, inputScalars.platform);
+		CUDA_CHECK(status, "Failed to select the CUDA device\n", -1);
+		status = cuDevicePrimaryCtxRetain(&standaloneContext, standaloneDevice);
+		CUDA_CHECK(status, "Failed to retain the CUDA context\n", -1);
+		status = cuCtxSetCurrent(standaloneContext);
+		CUDA_CHECK(status, "Failed to activate the CUDA context\n", -1);
+		CUDeviceID.push_back(standaloneDevice);
+		CUstream stream = nullptr;
+		status = cuStreamCreate(&stream, CU_STREAM_DEFAULT);
+		CUDA_CHECK(status, "Failed to create the CUDA stream\n", -1);
+		CLCommandQueue.push_back(stream);
+#endif
 
 		status2 = createProgram(programFP, programBP, programAux, header_directory, inputScalars, MethodList, w_vec, local_size, type);
 		if (status2 != NVRTC_SUCCESS) {
@@ -2826,14 +2875,14 @@ public:
 		// Use the prior local sizes
 		// TODO: Make the prior local size adjustable
 #ifndef METAL
-		if (inputScalars.fastPDHG && (inputScalars.BPType == 4 || inputScalars.BPType == 5)) {
+		if (inputScalars.fastPDHG && (inputScalars.BPType == 4 || inputScalars.BPType == 5) && inputScalars.CT && inputScalars.listmode == 0) {
 			local_size[0] = local_sizePrior[0];
 			local_size[1] = local_sizePrior[1];
 			local_size[2] = 1ULL;
 		}
 		// Check whether the prior local neighborhood can be cached in local memory
 		// If not, disable fastPDHG
-		if (inputScalars.fastPDHG && FASTNLMLOCALCACHE && (inputScalars.BPType == 4 || inputScalars.BPType == 5)) {
+		if (inputScalars.fastPDHG && FASTNLMLOCALCACHE && inputScalars.CT && inputScalars.listmode == 0 && (inputScalars.BPType == 4 || inputScalars.BPType == 5)) {
 			const size_t nVoxZ = (inputScalars.BPType == 5) ? (inputScalars.pitch ? 1ULL : static_cast<size_t>(NVOXELS5))
 				: (inputScalars.useHelical ? static_cast<size_t>(NVOXELSHELICAL) : static_cast<size_t>(NVOXELS));
 			size_t cacheSize = 0ULL;
@@ -3046,6 +3095,46 @@ public:
 		const size_t maskPriorDepth = inputScalars.multiResolution
 			? static_cast<size_t>(inputScalars.Nz[0])
 			: static_cast<size_t>(inputScalars.maskBPZ);
+		// Check for the correct size of the inputs
+		{
+			bool missing = false;
+			auto needNonEmpty = [&](const char* name, const size_t have) {
+				if (have == 0) {
+					mexPrintBase("%s is empty, but this configuration requires it\n", name);
+					mexEval();
+					missing = true;
+				}
+			};
+			if (inputScalars.projector_type != 6) {
+				if (inputScalars.BPType == 2 || inputScalars.BPType == 3 || inputScalars.FPType == 2 || inputScalars.FPType == 3)
+					needNonEmpty("V (tube-of-response volume)", inputScalars.size_V);
+				if ((!(inputScalars.CT || inputScalars.SPECT) && inputScalars.listmode == 0) || inputScalars.indexBased)
+					needNonEmpty("x (detector coordinates)", inputScalars.size_of_x);
+				if (inputScalars.listmode > 0 && inputScalars.computeSensImag) {
+					needNonEmpty("x (full detector coordinates, required for the sensitivity image)", inputScalars.size_of_x);
+					needNonEmpty("z (full detector coordinates, required for the sensitivity image)", inputScalars.size_z);
+				}
+			}
+			for (uint32_t timestep = 0; timestep < inputScalars.Nt; timestep++)
+				for (uint32_t kk = inputScalars.osa_iter0; kk < inputScalars.subsetsUsed; kk++) {
+					const size_t idx = static_cast<size_t>(kk) + static_cast<size_t>(timestep) * static_cast<size_t>(inputScalars.subsets);
+					if (kk >= length.size() || idx >= length.size()) {
+						mexPrintBase("length has %llu entries, but subset/timestep indexing needs at least ",
+							static_cast<unsigned long long>(length.size()));
+						mexPrintBase("%llu\n", static_cast<unsigned long long>(idx + 1));
+						mexEval();
+						missing = true;
+					}
+					else if (length[kk] <= 0 || length[idx] <= 0) {
+						mexPrintBase("subset %u ", kk);
+						mexPrintBase("of timestep %u contains no measurements\n", timestep);
+						mexEval();
+						missing = true;
+					}
+				}
+			if (missing)
+				return (STATUS_t)(-1);
+		}
 		// NLM anatomical reference image
 		if (w_vec.NLM_anatomical && (MethodList.NLM || MethodList.ProxNLM)) {
 			if (inputScalars.useImages) {
@@ -3121,13 +3210,14 @@ public:
 				CHECK(status, "\n", (STATUS_t)(-1));
 				memAlloc.xFull = true;
 			}
-			// Mask images
+			// Mask images. Dynamic SPECT keeps separate resources per timestep;
+			// detector-head stacks are shared within each timestep.
 			if (inputScalars.maskFP || inputScalars.maskBP) {
 				if (inputScalars.maskFP) {
 					if (inputScalars.useBuffers) {
-						if (inputScalars.maskFPZ > 1) {
-							d_maskFPB.resize(inputScalars.Nt);
-							for (uint32_t timestep = 0; timestep < inputScalars.Nt; timestep++) {
+						d_maskFPB.resize(inputScalars.Nt);
+						for (uint32_t timestep = 0; timestep < inputScalars.Nt; timestep++) {
+							if (inputScalars.maskFPZ > 1 && !(inputScalars.SPECT && inputScalars.maskFPZ == inputScalars.nHeads)) {
 								d_maskFPB[timestep].resize(inputScalars.subsetsUsed);
 								for (uint32_t kk = inputScalars.osa_iter0; kk < inputScalars.subsetsUsed; kk++) {
 									const uint32_t indD = kk + timestep * inputScalars.subsets;
@@ -3135,20 +3225,26 @@ public:
 									CHECK(status, "\n", (STATUS_t)(-1));
 								}
 							}
-						}
-						else {
-							d_maskFPB.resize(inputScalars.Nt);
-							for (uint32_t timestep = 0; timestep < inputScalars.Nt; timestep++) {
+							else {
 								d_maskFPB[timestep].resize(1);
-								ALLOC_BUFFER(d_maskFPB[timestep][0], CL_MEM_READ_ONLY, sizeof(uint8_t) * inputScalars.nRowsD * inputScalars.nColsD);
+								const size_t maskDepth = (inputScalars.SPECT && inputScalars.maskFPZ == inputScalars.nHeads) ? inputScalars.nHeads : 1ULL;
+								ALLOC_BUFFER(d_maskFPB[timestep][0], CL_MEM_READ_ONLY, sizeof(uint8_t) * inputScalars.nRowsD * inputScalars.nColsD * maskDepth);
+								CHECK(status, "\n", (STATUS_t)(-1));
 							}
 						}
 					}
-					else {
-						if (inputScalars.maskFPZ > 1) {
-							d_maskFP3.resize(inputScalars.Nt);
-							maskArrayFP.resize(inputScalars.Nt);
-							for (uint32_t timestep = 0; timestep < inputScalars.Nt; timestep++) {
+					else if (inputScalars.maskFPZ > 1) {
+						d_maskFP3.resize(inputScalars.Nt);
+						maskArrayFP.resize(inputScalars.Nt);
+						for (uint32_t timestep = 0; timestep < inputScalars.Nt; timestep++) {
+							if (inputScalars.SPECT && inputScalars.maskFPZ == inputScalars.nHeads) {
+								d_maskFP3[timestep].resize(1);
+								maskArrayFP[timestep].resize(1);
+								CREATE_MASK_TEXTURE3D_FROM_HOST(d_maskFP3[timestep][0], d_maskFP3[timestep][0], maskArrayFP[timestep][0], w_vec.maskFP,
+									inputScalars.nRowsD, inputScalars.nColsD, inputScalars.nHeads, inputScalars.nHeads, inputScalars.nHeads, BACKEND_TEXTURE_READ_AS_INTEGER);
+								CHECK(status, "\n", (STATUS_t)(-1));
+							}
+							else {
 								d_maskFP3[timestep].resize(inputScalars.subsetsUsed);
 								maskArrayFP[timestep].resize(inputScalars.subsetsUsed);
 								for (uint32_t kk = inputScalars.osa_iter0; kk < inputScalars.subsetsUsed; kk++) {
@@ -3159,13 +3255,13 @@ public:
 								}
 							}
 						}
-						else {
-							maskArrayFP.resize(1);
-							maskArrayFP[0].resize(1);
-							CREATE_MASK_TEXTURE2D_FROM_HOST(d_maskFP, maskArrayFP[0][0], w_vec.maskFP,
-								inputScalars.nRowsD, inputScalars.nColsD, BACKEND_TEXTURE_READ_AS_INTEGER);
-							CHECK(status, "\n", (STATUS_t)(-1));
-						}
+					}
+					else {
+						maskArrayFP.resize(1);
+						maskArrayFP[0].resize(1);
+						CREATE_MASK_TEXTURE2D_FROM_HOST(d_maskFP, maskArrayFP[0][0], w_vec.maskFP,
+							inputScalars.nRowsD, inputScalars.nColsD, BACKEND_TEXTURE_READ_AS_INTEGER);
+						CHECK(status, "\n", (STATUS_t)(-1));
 					}
 					memAlloc.maskFP = true;
 				}
@@ -3178,11 +3274,11 @@ public:
 				memAlloc.zFull = true;
 			}
 			if (inputScalars.SPECT) {
-				ALLOC_BUFFER(d_rayShiftsDetector, CL_MEM_READ_ONLY, sizeof(float) * 2 * inputScalars.n_rays * inputScalars.nRowsD * 
-					inputScalars.nColsD * inputScalars.nProjections);
+				ALLOC_BUFFER(d_rayShiftsDetector, CL_MEM_READ_ONLY, sizeof(float) * 2 * inputScalars.n_rays * inputScalars.n_rays3D * inputScalars.nRowsD *
+					inputScalars.nColsD * inputScalars.nHeads);
 				CHECK(status, "\n", (STATUS_t)(-1));
-				ALLOC_BUFFER(d_rayShiftsSource, CL_MEM_READ_ONLY, sizeof(float) * 2 * inputScalars.n_rays * inputScalars.nRowsD * 
-					inputScalars.nColsD * inputScalars.nProjections);
+				ALLOC_BUFFER(d_rayShiftsSource, CL_MEM_READ_ONLY, sizeof(float) * 2 * inputScalars.n_rays * inputScalars.n_rays3D * inputScalars.nRowsD *
+					inputScalars.nColsD * inputScalars.nHeads);
 				CHECK(status, "\n", (STATUS_t)(-1));
 				memAlloc.rayShifts = true;
 			}
@@ -3246,6 +3342,10 @@ public:
 				}
 				for (uint32_t kk = inputScalars.osa_iter0; kk < inputScalars.subsetsUsed; kk++) {
 					const uint32_t indD = kk + timestep * inputScalars.subsets;
+					if (inputScalars.SPECT) {
+						ALLOC_BUFFER(d_detectorVector[timestep][kk], CL_MEM_READ_ONLY, sizeof(uint32_t) * length[indD]);
+						CHECK(status, "\n", (STATUS_t)(-1));
+					}
 					if (inputScalars.CT || inputScalars.SPECT) {
 						ALLOC_BUFFER(d_x[timestep][kk], CL_MEM_READ_ONLY, sizeof(float) * length[indD] * 6);
 						CHECK(status, "\n", (STATUS_t)(-1));
@@ -3253,7 +3353,7 @@ public:
 					}
 					// First condition: load all data at once 
 					// Second condition: load one subset at a time (only 1 buffer required, loadCoord reloads it for each subset/timestep)
-					else if (inputScalars.listmode > 0 && !inputScalars.indexBased && (inputScalars.loadTOF || (kk == 0 && timestep == 0))) {
+					else if (inputScalars.listmode > 0 && !inputScalars.indexBased && (inputScalars.loadTOF || (kk == inputScalars.osa_iter0 && timestep == inputScalars.timestep0))) {
 						ALLOC_BUFFER(d_x[timestep][kk], CL_MEM_READ_ONLY, sizeof(float) * length[kk + timestep * inputScalars.subsets] * 6);
 						CHECK(status, "\n", (STATUS_t)(-1));
 						memAlloc.xSteps++;
@@ -3274,6 +3374,8 @@ public:
 						memAlloc.zSteps++;
 					}
 					else {
+						const uint32_t zTimestep = inputScalars.listmode > 0 ? 0U : timestep;
+						const uint32_t zSubset = inputScalars.listmode > 0 ? 0U : kk;
 						if (inputScalars.PET && inputScalars.listmode == 0) {
 							if (inputScalars.nLayers > 1)
 								ALLOC_BUFFER(d_z[timestep][kk], CL_MEM_READ_ONLY, sizeof(float) * length[kk] * 3);
@@ -3283,12 +3385,12 @@ public:
 							memAlloc.zSteps++;
 						}
 						else if (kk == inputScalars.osa_iter0 && (inputScalars.listmode == 0 || inputScalars.indexBased)) {
-							ALLOC_BUFFER(d_z[timestep][kk], CL_MEM_READ_ONLY, sizeof(float) * inputScalars.size_z);
+							ALLOC_BUFFER(d_z[zTimestep][zSubset], CL_MEM_READ_ONLY, sizeof(float) * (inputScalars.size_z > 0 ? inputScalars.size_z : static_cast<size_t>(1)));
 							memAlloc.zType = 0;
 							memAlloc.zSteps = kk;
 						}
 						else {
-							ALLOC_BUFFER(d_z[timestep][kk], CL_MEM_READ_ONLY, sizeof(float) * inputScalars.size_z);
+							ALLOC_BUFFER(d_z[zTimestep][zSubset], CL_MEM_READ_ONLY, sizeof(float) * (inputScalars.size_z > 0 ? inputScalars.size_z : static_cast<size_t>(1)));
 							memAlloc.zType = 0;
 							memAlloc.zSteps = kk;
 						}
@@ -3301,7 +3403,10 @@ public:
 						memAlloc.eSteps++;
 					}
 					if (inputScalars.size_norm > 1 && inputScalars.normalization_correction) {
-						ALLOC_BUFFER(d_norm[timestep][kk], CL_MEM_READ_ONLY, sizeof(float) * length[indD] * vecSize);
+						const size_t normElements = (inputScalars.SPECT && inputScalars.normZ == inputScalars.nHeads)
+							? static_cast<size_t>(inputScalars.nRowsD) * static_cast<size_t>(inputScalars.nColsD) * static_cast<size_t>(inputScalars.nHeads)
+							: static_cast<size_t>(length[indD]) * vecSize;
+						ALLOC_BUFFER(d_norm[timestep][kk], CL_MEM_READ_ONLY, sizeof(float) * normElements);
 						CHECK(status, "\n", (STATUS_t)(-1));
 						memAlloc.norm = true;
 						memAlloc.nSteps++;
@@ -3313,7 +3418,7 @@ public:
 						memAlloc.aSteps++;
 					}
 					if (inputScalars.listmode > 0 && inputScalars.indexBased) {
-						if (inputScalars.loadTOF || (kk == 0 && !inputScalars.loadTOF && timestep == 0)) {
+						if (inputScalars.loadTOF || (kk == inputScalars.osa_iter0 && !inputScalars.loadTOF && timestep == inputScalars.timestep0)) {
 							ALLOC_BUFFER(d_trIndex[timestep][kk], CL_MEM_READ_ONLY, sizeof(uint16_t) * length[kk + timestep * inputScalars.subsets] * 2);
 							CHECK(status, "\n", (STATUS_t)(-1));
 							ALLOC_BUFFER(d_axIndex[timestep][kk], CL_MEM_READ_ONLY, sizeof(uint16_t) * length[kk + timestep * inputScalars.subsets] * 2);
@@ -3323,7 +3428,7 @@ public:
 						}
 					}
 					if (inputScalars.listmode > 0 && inputScalars.TOF) {
-						if (inputScalars.loadTOF || (kk == 0 && !inputScalars.loadTOF && timestep == 0)) {
+						if (inputScalars.loadTOF || (kk == inputScalars.osa_iter0 && !inputScalars.loadTOF && timestep == inputScalars.timestep0)) {
 							ALLOC_BUFFER(d_TOFIndex[timestep][kk], CL_MEM_READ_ONLY, sizeof(uint8_t) * length[kk + timestep * inputScalars.subsets]);
 							CHECK(status, "\n", (STATUS_t)(-1));
 							memAlloc.TOFIndex = true;
@@ -3413,15 +3518,17 @@ public:
 			if (inputScalars.maskFP || inputScalars.maskBP || (inputScalars.useExtendedFOV && !inputScalars.multiResolution)) {
 				if (inputScalars.useBuffers) {
 					if (inputScalars.maskFP) {
-						if (inputScalars.maskFPZ > 1)
+						if (inputScalars.maskFPZ > 1 && !(inputScalars.SPECT && inputScalars.maskFPZ == inputScalars.nHeads))
 							for (uint32_t timestep = 0; timestep < inputScalars.Nt; timestep++)
 								for (uint32_t kk = inputScalars.osa_iter0; kk < inputScalars.subsetsUsed; kk++) {
 									const uint32_t indD = kk + timestep * inputScalars.subsets;
 									WRITE_BUFFER(d_maskFPB[timestep][kk], sizeof(uint8_t) * inputScalars.nRowsD * inputScalars.nColsD * length[indD], &w_vec.maskFP[pituus[indD] * vecSize]);
 								}
-						else
+						else {
 							for (uint32_t timestep = 0; timestep < inputScalars.Nt; timestep++)
-								WRITE_BUFFER(d_maskFPB[timestep][0], sizeof(uint8_t) * inputScalars.nRowsD * inputScalars.nColsD, w_vec.maskFP);
+								WRITE_BUFFER(d_maskFPB[timestep][0], sizeof(uint8_t) * inputScalars.nRowsD * inputScalars.nColsD *
+									((inputScalars.SPECT && inputScalars.maskFPZ == inputScalars.nHeads) ? inputScalars.nHeads : 1ULL), w_vec.maskFP);
+						}
 						CHECK(status, "\n", (STATUS_t)(-1));
 						const size_t maskFPDepth = inputScalars.maskFPZ > 1 ? static_cast<size_t>(inputScalars.maskFPZ) : 1ULL;
 						memSize += sizeof(uint8_t) * static_cast<size_t>(inputScalars.nRowsD) * static_cast<size_t>(inputScalars.nColsD) * maskFPDepth;
@@ -3453,14 +3560,13 @@ public:
 				memSize += (sizeof(float) * inputScalars.nBins);
 			}
 			if (inputScalars.SPECT) {
-				WRITE_BUFFER(d_rayShiftsDetector, sizeof(float) * 2 * inputScalars.n_rays * inputScalars.nRowsD * inputScalars.nColsD * 
-					inputScalars.nProjections, w_vec.rayShiftsDetector);
+				const size_t rayShiftSize = static_cast<size_t>(2) * inputScalars.n_rays * inputScalars.n_rays3D * inputScalars.nRowsD * inputScalars.nColsD * inputScalars.nHeads;
+				WRITE_BUFFER(d_rayShiftsDetector, sizeof(float) * rayShiftSize, w_vec.rayShiftsDetector);
 				CHECK(status, "\n", (STATUS_t)(-1));
-				memSize += (sizeof(float) * 2 * inputScalars.n_rays * inputScalars.nRowsD * inputScalars.nColsD * inputScalars.nProjections);
-				WRITE_BUFFER(d_rayShiftsSource, sizeof(float) * 2 * inputScalars.n_rays * inputScalars.nRowsD * inputScalars.nColsD * 
-					inputScalars.nProjections, w_vec.rayShiftsSource);
+				memSize += sizeof(float) * rayShiftSize;
+				WRITE_BUFFER(d_rayShiftsSource, sizeof(float) * rayShiftSize, w_vec.rayShiftsSource);
 				CHECK(status, "\n", (STATUS_t)(-1));
-				memSize += (sizeof(float) * 2 * inputScalars.n_rays * inputScalars.nRowsD * inputScalars.nColsD * inputScalars.nProjections);
+				memSize += sizeof(float) * rayShiftSize;
 			}
 
 			if (DEBUG) {
@@ -3498,6 +3604,12 @@ public:
 				}
 				for (uint32_t kk = inputScalars.osa_iter0; kk < inputScalars.subsetsUsed; kk++) {
 					const uint32_t indD = kk + timestep * inputScalars.subsets;
+					if (inputScalars.SPECT) {
+						WRITE_BUFFER(d_detectorVector[timestep][kk], sizeof(uint32_t) * length[indD],
+							&w_vec.detectorVector[pituus[indD]]);
+						CHECK(status, "\n", (STATUS_t)(-1));
+						memSize += sizeof(uint32_t) * length[indD];
+					}
 					if ((inputScalars.CT || inputScalars.SPECT) && inputScalars.listmode == 0) {
 						size_t kerroin = 2;
 						if (inputScalars.pitch)
@@ -3509,6 +3621,8 @@ public:
 						memSize += sizeof(float) * length[indD] * kerroin;
 					}
 					else {
+						const uint32_t zTimestep = inputScalars.listmode > 0 ? 0U : timestep;
+						const uint32_t zSubset = inputScalars.listmode > 0 ? 0U : kk;
 						if (inputScalars.PET && inputScalars.listmode == 0) {
 							int64_t kerroin = 2;
 							if (inputScalars.nLayers > 1)
@@ -3516,8 +3630,8 @@ public:
 							WRITE_BUFFER(d_z[timestep][kk], sizeof(float) * length[kk] * kerroin, &z_det[pituus[kk] * kerroin]);
 							memSize += (sizeof(float) * length[kk] * kerroin);
 						}
-						else if (kk == inputScalars.osa_iter0 && (inputScalars.listmode == 0 || inputScalars.indexBased || inputScalars.listmode > 0)) {
-							WRITE_BUFFER(d_z[timestep][kk], sizeof(float) * inputScalars.size_z, z_det);
+						else if (kk == inputScalars.osa_iter0 && inputScalars.size_z > 0) {
+							WRITE_BUFFER(d_z[zTimestep][zSubset], sizeof(float) * inputScalars.size_z, z_det);
 							memSize += (sizeof(float) * inputScalars.size_z);
 						}
 						CHECK(status, "\n", (STATUS_t)(-1));
@@ -3528,7 +3642,7 @@ public:
 						memSize += sizeof(float) * length[indD] * 6;
 					}
 					else if (inputScalars.listmode > 0 && !inputScalars.indexBased) {
-						if (inputScalars.loadTOF || (kk == 0 && timestep == 0)) {
+						if (inputScalars.loadTOF || (kk == inputScalars.osa_iter0 && timestep == inputScalars.timestep0)) {
 							WRITE_BUFFER(d_x[timestep][kk], sizeof(float) * length[kk + timestep * inputScalars.subsets] * 6, 
 								&w_vec.listCoord[pituus[kk + timestep * inputScalars.subsets] * 6]);
 							CHECK(status, "\n", (STATUS_t)(-1));
@@ -3547,9 +3661,14 @@ public:
 						memSize += sizeof(float) * length[indD] * vecSize;
 					}
 					if (inputScalars.size_norm > 1ULL && inputScalars.normalization_correction) {
-						WRITE_BUFFER(d_norm[timestep][kk], sizeof(float) * length[indD] * vecSize, &norm[pituus[indD] * vecSize]);
+						if (inputScalars.SPECT && inputScalars.normZ == inputScalars.nHeads)
+							WRITE_BUFFER(d_norm[timestep][kk], sizeof(float) * inputScalars.nRowsD * inputScalars.nColsD * inputScalars.nHeads, norm);
+						else
+							WRITE_BUFFER(d_norm[timestep][kk], sizeof(float) * length[indD] * vecSize, &norm[pituus[indD] * vecSize]);
 						CHECK(status, "\n", (STATUS_t)(-1));
-						memSize += sizeof(float) * length[indD] * vecSize;
+						memSize += sizeof(float) * ((inputScalars.SPECT && inputScalars.normZ == inputScalars.nHeads)
+							? static_cast<size_t>(inputScalars.nRowsD) * static_cast<size_t>(inputScalars.nColsD) * static_cast<size_t>(inputScalars.nHeads)
+							: static_cast<size_t>(length[indD]) * vecSize);
 					}
 					if (inputScalars.attenuation_correction && !inputScalars.CTAttenuation) {
 						WRITE_BUFFER(d_atten[timestep][kk], sizeof(float) * length[indD] * vecSize, &atten[pituus[indD] * vecSize]);
@@ -3558,7 +3677,7 @@ public:
 					}
 					if (inputScalars.listmode > 0 && inputScalars.indexBased) {
 						// First condition: load all data at once. Second condition: load one subset at a time (only 1 buffer required for each timestep).
-						if (inputScalars.loadTOF || (kk == 0 && !inputScalars.loadTOF && timestep == 0)) {
+						if (inputScalars.loadTOF || (kk == inputScalars.osa_iter0 && !inputScalars.loadTOF && timestep == inputScalars.timestep0)) {
 							WRITE_BUFFER(d_trIndex[timestep][kk], sizeof(uint16_t) * length[kk + timestep * inputScalars.subsets] * 2, 
 								&w_vec.trIndex[pituus[kk + timestep * inputScalars.subsets] * 2]);
 							CHECK(status, "\n", (STATUS_t)(-1));
@@ -3570,7 +3689,7 @@ public:
 						}
 					}
 					if (inputScalars.listmode > 0 && inputScalars.TOF) {
-						if (inputScalars.loadTOF || (kk == 0 && !inputScalars.loadTOF && timestep == 0)) {
+						if (inputScalars.loadTOF || (kk == inputScalars.osa_iter0 && !inputScalars.loadTOF && timestep == inputScalars.timestep0)) {
 							WRITE_BUFFER(d_TOFIndex[timestep][kk], sizeof(uint8_t) * length[kk + timestep * inputScalars.subsets], 
 								&w_vec.TOFIndices[pituus[kk + timestep * inputScalars.subsets]]);
 							CHECK(status, "\n", (STATUS_t)(-1));
@@ -3758,6 +3877,7 @@ public:
 			d_scat.resize(inputScalars.Nt);
 			d_x.resize(inputScalars.Nt);
 			d_z.resize(inputScalars.Nt);
+            d_detectorVector.resize(inputScalars.Nt);
 			d_trIndex.resize(inputScalars.Nt);
 			d_axIndex.resize(inputScalars.Nt);
 				d_TOFIndex.resize(inputScalars.Nt);
@@ -3765,6 +3885,7 @@ public:
 					d_scat[tt].resize(inputScalars.subsetsUsed);
 				d_x[tt].resize(inputScalars.subsetsUsed);
 				d_z[tt].resize(inputScalars.subsetsUsed);
+                d_detectorVector[tt].resize(inputScalars.subsetsUsed);
 				d_trIndex[tt].resize(inputScalars.subsetsUsed);
 				d_axIndex[tt].resize(inputScalars.subsetsUsed);
 				d_TOFIndex[tt].resize(inputScalars.subsetsUsed);
@@ -4189,19 +4310,23 @@ public:
 		}
 		encoder->setComputePipelineState(kernelFP.get());
 #endif // END CUDA
+		// Per-launch copy of the work-group range: the 1D branch below has to flatten it, and local is a
+		// member shared with the backprojection and with the other, multidimensional launches here.
+		WORKRANGE_t localFP = local;
 		if (inputScalars.FPType == 5) {
 			SET_LAUNCH_RANGE3(global, inputScalars.nRowsD + erotus[0], (inputScalars.nColsD + NVOXELSFP - 1) / NVOXELSFP + erotus[1],
-				length[osa_iter + timestep * inputScalars.subsets], local);
+				length[osa_iter + timestep * inputScalars.subsets], localFP);
 		}
 		else if ((inputScalars.CT || inputScalars.SPECT || inputScalars.PET) && inputScalars.listmode == 0) {
 			SET_LAUNCH_RANGE3(global, inputScalars.nRowsD + erotus[0], inputScalars.nColsD + erotus[1],
-				length[osa_iter + timestep * inputScalars.subsets], local);
+				length[osa_iter + timestep * inputScalars.subsets], localFP);
 		}
 		else {
 			erotus[0] = length[osa_iter + timestep * inputScalars.subsets] % local_size[0];
 			if (erotus[0] > 0)
 				erotus[0] = (local_size[0] - erotus[0]);
-			SET_LAUNCH_RANGE3(global, length[osa_iter + timestep * inputScalars.subsets] + erotus[0], 1, 1, local);
+			SET_RANGE2(localFP, local_size[0], 1);
+			SET_LAUNCH_RANGE3(global, length[osa_iter + timestep * inputScalars.subsets] + erotus[0], 1, 1, localFP);
 		}
 #if defined(METAL)
 		const uint32_t indD = osa_iter + timestep * inputScalars.subsets;
@@ -4229,9 +4354,9 @@ public:
 			mexPrintBase("global[0] = %u\n", global[0]);
 			mexPrintBase("global[1] = %u\n", global[1]);
 			mexPrintBase("global[2] = %u\n", global[2]);
-			mexPrintBase("local[0] = %u\n", local[0]);
-			mexPrintBase("local[1] = %u\n", local[1]);
-			mexPrintBase("local[2] = %u\n", local[2]);
+			mexPrintBase("localFP[0] = %u\n", localFP[0]);
+			mexPrintBase("localFP[1] = %u\n", localFP[1]);
+			mexPrintBase("localFP[2] = %u\n", localFP[2]);
 			mexPrintBase("global[1] = %u\n", global[1]);
 			mexPrintBase("global[2] = %u\n", global[2]);
 			mexPrintBase("erotus[0] = %u\n", erotus[0]);
@@ -4250,7 +4375,7 @@ public:
 			mexPrintBase("bmax[ii].s2 = %f\n", VEC_Z(bmax[ii]));
 #if defined(OPENCL)
 			mexPrintBase("global.dimensions() = %u\n", global.dimensions());
-			mexPrintBase("local.dimensions() = %u\n", local.dimensions());
+			mexPrintBase("localFP.dimensions() = %u\n", localFP.dimensions());
 #endif // END CUDA
 			mexPrintBase("kernelIndFPSubIter = %u\n", kernelIndFPSubIter);
 			mexPrintBase("kernelIndFP = %u\n", kernelIndFP);
@@ -4377,7 +4502,7 @@ public:
 			if ((inputScalars.CT || inputScalars.PET)) {
 				KARG(kTemp, kernelFP, kernelIndFPSubIter, d_z[timestep][osa_iter]);
 			}
-			else if (inputScalars.listmode > 0 && !inputScalars.indexBased) {
+			else if (inputScalars.listmode > 0) {
 				KARG(kTemp, kernelFP, kernelIndFPSubIter, d_z[0][0]);
 			}
 			else {
@@ -4387,20 +4512,20 @@ public:
 				KARG_METAL_SLOT(kernelIndFPSubIter, 7);
 				if (inputScalars.useBuffers) {
 					int subset = 0;
-					if (inputScalars.maskFPZ > 1)
+					if (inputScalars.maskFPZ > 1 && !(inputScalars.SPECT && inputScalars.maskFPZ == inputScalars.nHeads))
 						subset = osa_iter;
 					KARG(kTemp, kernelFP, kernelIndFPSubIter, d_maskFPB[timestep][subset]);
 				}
 				else
 					if (inputScalars.maskFPZ > 1) {
-						KARG(kTemp, kernelFP, kernelIndFPSubIter, d_maskFP3[timestep][osa_iter]);
+						KARG(kTemp, kernelFP, kernelIndFPSubIter, (inputScalars.SPECT && inputScalars.maskFPZ == inputScalars.nHeads) ? d_maskFP3[timestep][0] : d_maskFP3[timestep][osa_iter]);
 					}
 					else {
 						KARG(kTemp, kernelFP, kernelIndFPSubIter, d_maskFP);
 					}
 			}
 			KARG_SCALAR(kTemp, kernelFP, kernelIndFPSubIter, length[osa_iter + timestep * inputScalars.subsets]);
-			if ((inputScalars.subsetType == 3 || inputScalars.subsetType == 6 || inputScalars.subsetType == 7) && inputScalars.subsetsUsed > 1 && inputScalars.listmode == 0) {
+			if ((inputScalars.subsetType == 3 || inputScalars.subsetType == 6 || inputScalars.subsetType == 7) && inputScalars.subsets > 1 && !inputScalars.CT && !inputScalars.SPECT && !inputScalars.PET && inputScalars.listmode == 0) {
 				KARG_METAL_SLOT(kernelIndFPSubIter, 9);
 				KARG(kTemp, kernelFP, kernelIndFPSubIter, d_xyindex[osa_iter]);
 				KARG(kTemp, kernelFP, kernelIndFPSubIter, d_zindex[osa_iter]);
@@ -4465,13 +4590,13 @@ public:
 				KARG_METAL_SLOT(kernelIndFPSubIter, 7);
 				if (inputScalars.useBuffers) {
 					int subset = 0;
-					if (inputScalars.maskFPZ > 1)
+					if (inputScalars.maskFPZ > 1 && !(inputScalars.SPECT && inputScalars.maskFPZ == inputScalars.nHeads))
 						subset = osa_iter;
 					KARG(kTemp, kernelFP, kernelIndFPSubIter, d_maskFPB[timestep][subset]);
 				}
 				else
 					if (inputScalars.maskFPZ > 1) {
-						KARG(kTemp, kernelFP, kernelIndFPSubIter, d_maskFP3[timestep][osa_iter]);
+						KARG(kTemp, kernelFP, kernelIndFPSubIter, (inputScalars.SPECT && inputScalars.maskFPZ == inputScalars.nHeads) ? d_maskFP3[timestep][0] : d_maskFP3[timestep][osa_iter]);
 					}
 					else
 						KARG(kTemp, kernelFP, kernelIndFPSubIter, d_maskFP);
@@ -4491,13 +4616,13 @@ public:
 				KARG_METAL_SLOT(kernelIndFPSubIter, 6);
 				if (inputScalars.useBuffers) {
 					int subset = 0;
-					if (inputScalars.maskFPZ > 1)
+					if (inputScalars.maskFPZ > 1 && !(inputScalars.SPECT && inputScalars.maskFPZ == inputScalars.nHeads))
 						subset = osa_iter;
 					KARG(kTemp, kernelFP, kernelIndFPSubIter, d_maskFPB[timestep][subset]);
 				}
 				else
 					if (inputScalars.maskFPZ > 1) {
-						KARG(kTemp, kernelFP, kernelIndFPSubIter, d_maskFP3[timestep][osa_iter]);
+						KARG(kTemp, kernelFP, kernelIndFPSubIter, (inputScalars.SPECT && inputScalars.maskFPZ == inputScalars.nHeads) ? d_maskFP3[timestep][0] : d_maskFP3[timestep][osa_iter]);
 					}
 					else
 						KARG(kTemp, kernelFP, kernelIndFPSubIter, d_maskFP);
@@ -4514,7 +4639,7 @@ public:
 			if ((inputScalars.CT || inputScalars.PET || inputScalars.SPECT)) {
 				KARG(kTemp, kernelFP, kernelIndFPSubIter, d_z[timestep][osa_iter]);
 			}
-			else if (inputScalars.listmode > 0 && !inputScalars.indexBased) {
+			else if (inputScalars.listmode > 0) {
 				KARG(kTemp, kernelFP, kernelIndFPSubIter, d_z[0][0]);
 			}
 			else
@@ -4537,7 +4662,7 @@ public:
 			KARG_SCALAR(kTemp, kernelFP, kernelIndFPSubIter, d[ii]);
 			KARG_SCALAR(kTemp, kernelFP, kernelIndFPSubIter, b[ii]);
 			KARG_SCALAR(kTemp, kernelFP, kernelIndFPSubIter, bmax[ii]);
-			if ((inputScalars.subsetType == 3 || inputScalars.subsetType == 6 || inputScalars.subsetType == 7) && inputScalars.subsetsUsed > 1 && inputScalars.listmode == 0) {
+			if ((inputScalars.subsetType == 3 || inputScalars.subsetType == 6 || inputScalars.subsetType == 7) && inputScalars.subsets > 1 && !inputScalars.CT && !inputScalars.SPECT && !inputScalars.PET && inputScalars.listmode == 0) {
 				KARG_METAL_SLOT(kernelIndFPSubIter, 13);
 				KARG(kTemp, kernelFP, kernelIndFPSubIter, d_xyindex[osa_iter]);
 				KARG(kTemp, kernelFP, kernelIndFPSubIter, d_zindex[osa_iter]);
@@ -4582,7 +4707,11 @@ public:
 #endif
 					KARG(kTemp, kernelFP, kernelIndFPSubIter, vec_opencl.d_image_os);
 				}
-			KARG(kTemp, kernelFP, kernelIndFPSubIter, d_output);
+				KARG(kTemp, kernelFP, kernelIndFPSubIter, d_output);
+			if (inputScalars.SPECT) {
+				KARG_METAL_SLOT(kernelIndFPSubIter, 21);
+				KARG(kTemp, kernelFP, kernelIndFPSubIter, d_detectorVector[timestep][osa_iter]);
+			}
 			KARG_SCALAR(kTemp, kernelFP, kernelIndFPSubIter, no_norm);
 			KARG_SCALAR(kTemp, kernelFP, kernelIndFPSubIter, m_size);
 			KARG_SCALAR(kTemp, kernelFP, kernelIndFPSubIter, osa_iter);
@@ -4591,19 +4720,19 @@ public:
 		if (DEBUG || inputScalars.verbose >= 3)
 			START_TIMER(tStart);
 #if defined(CUDA) || defined(HIP)
-		status = cuLaunchKernel(kernelFP, global[0], global[1], global[2], local[0], local[1], local[2], 0, CLCommandQueue[0], kTemp.data(), NULL);
+		status = cuLaunchKernel(kernelFP, global[0], global[1], global[2], localFP[0], localFP[1], localFP[2], 0, CLCommandQueue[0], kTemp.data(), NULL);
 		CUDA_CHECK(status, "Failed to launch forward projection kernel\n", -1);
 #elif defined(METAL)
 		{
-			const MTL::Size threadsPerThreadgroup = MTL::Size::Make(local[0], local[1], local[2]);
-			const MTL::Size threadgroupsPerGrid = MTL::Size::Make(global[0] / local[0], global[1] / local[1], global[2] / local[2]);
+			const MTL::Size threadsPerThreadgroup = MTL::Size::Make(localFP[0], localFP[1], localFP[2]);
+			const MTL::Size threadgroupsPerGrid = MTL::Size::Make(global[0] / localFP[0], global[1] / localFP[1], global[2] / localFP[2]);
 			encoder->dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup);
 			encoder->endEncoding();
 			commandBuffer->commit();
 			commandBuffer->waitUntilCompleted();
 		}
 #elif defined(OPENCL)
-		status = CLCommandQueue[0].enqueueNDRangeKernel(kernelFP, cl::NDRange(), global, local, NULL);
+		status = CLCommandQueue[0].enqueueNDRangeKernel(kernelFP, cl::NDRange(), global, localFP, NULL);
 		OCL_CHECK(status, "\n", -1);
 #endif // END CUDA
 		if (DEBUG || inputScalars.verbose >= 3) {
@@ -4641,7 +4770,7 @@ public:
 #if defined(CUDA) || defined(HIP)
 	inline int backwardProjection(scalarStruct & inputScalars, Weighting & w_vec, uint32_t osa_iter, uint32_t timestep,
 		std::vector<int64_t>&length, uint64_t m_size, const RecMethods & MethodList = RecMethods(), const bool compSens = false, int ii = 0, const int uu = 0,
-		const int queueIdx = 0, const bool newInput = true) {
+		int ee = -1, const int queueIdx = 0, const bool newInput = true) {
 #elif defined(METAL) || defined(OPENCL)
 	// MethodList defaults to an empty RecMethods() so the METAL branch below keeps compiling unchanged
 	// TODO: Metal support for fastPDHG?
@@ -4654,13 +4783,11 @@ public:
 		STATUS_t status = SUCCESS_VALUE;
 #if defined(CUDA) || defined(HIP)
 		std::vector<void*> kTemp = BPArgs;
-#elif defined(OPENCL) || defined(METAL)
-		if (ee < 0)
-			ee = uu;
-#if defined(OPENCL)
+#elif defined(OPENCL)
 		kernelIndBPSubIter = kernelIndBP;
-#endif // END OPENCL
 #endif // END CUDA
+        if (ee < 0)
+			ee = uu;
 		if (inputScalars.listmode > 0 && compSens) {
 			kernelApu = kernelBP;
 			kernelBP = kernelSensList;
@@ -4686,6 +4813,7 @@ public:
 		}
 		encoder->setComputePipelineState(kernelBP.get());
 #endif // END METAL
+		WORKRANGE_t localBP = local;
 		TimerPoint tStart, tEnd;
 		if (DEBUG || inputScalars.verbose >= 3) {
 			INIT_TIMER(tStart, tEnd);
@@ -4775,8 +4903,8 @@ public:
 			}
 			if (DEBUG) {
 				mexPrintBase("global[0] = %u\n", global[0]);
-				mexPrintBase("local[0] = %u\n", local[0]);
-				mexPrintBase("local[1] = %u\n", local[1]);
+				mexPrintBase("localBP[0] = %u\n", localBP[0]);
+				mexPrintBase("localBP[1] = %u\n", localBP[1]);
 				mexPrintBase("global[1] = %u\n", global[1]);
 				mexPrintBase("global[2] = %u\n", global[2]);
 				if (inputScalars.listmode > 0 && compSens) {
@@ -4791,7 +4919,7 @@ public:
 				mexPrintBase("kernelIndBPSubIter = %u\n", BPArgs.size());
 #elif defined(OPENCL)
 				mexPrintBase("global.dimensions() = %u\n", global.dimensions());
-				mexPrintBase("local.dimensions() = %u\n", local.dimensions());
+				mexPrintBase("localBP.dimensions() = %u\n", localBP.dimensions());
 				mexPrintBase("kernelIndBPSubIter = %u\n", kernelIndBPSubIter);
 #endif // END CUDA
 				mexPrintBase("m_size = %u\n", m_size);
@@ -4815,13 +4943,13 @@ public:
 					KARG_METAL_SLOT(kernelIndBPSubIter, 6);
 					if (inputScalars.useBuffers) {
 						int subset = 0;
-						if (inputScalars.maskFPZ > 1)
+						if (inputScalars.maskFPZ > 1 && !(inputScalars.SPECT && inputScalars.maskFPZ == inputScalars.nHeads))
 							subset = osa_iter;
 						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_maskFPB[timestep][subset]);
 					}
 					else
 						if (inputScalars.maskFPZ > 1) {
-							KARG(kTemp, kernelBP, kernelIndBPSubIter, d_maskFP3[timestep][osa_iter]);
+							KARG(kTemp, kernelBP, kernelIndBPSubIter, (inputScalars.SPECT && inputScalars.maskFPZ == inputScalars.nHeads) ? d_maskFP3[timestep][0] : d_maskFP3[timestep][osa_iter]);
 						}
 						else
 							KARG(kTemp, kernelBP, kernelIndBPSubIter, d_maskFP);
@@ -4857,7 +4985,7 @@ public:
 				if ((inputScalars.CT || inputScalars.PET || inputScalars.SPECT)) {
 					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_z[timestep][osa_iter]);
 				}
-				else if (inputScalars.indexBased || inputScalars.listmode > 0) {
+				else if (inputScalars.listmode > 0) {
 					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_z[0][0]);
 				}
 				else
@@ -4887,25 +5015,13 @@ public:
 					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_scat[timestep][osa_iter]);
 				}
 			}
-#if defined(METAL)
 			KARG_METAL_SLOT(kernelIndBPSubIter, 12);
-			// The kernel signature always includes the sensitivity buffer, but
-			// no_norm guarantees that it is not accessed. Bind the current
-			// per-volume RHS buffer in that case instead of a dummy allocation.
-			// This also avoids an invalid Metal buffer binding for auxiliary
-			// multiresolution volumes in PDHG's power method.
-			const DEVBUFF_t& sensitivityBuffer = no_norm == 0 ? d_Summ[uu] : vec_opencl.d_rhs_os[uu];
-			KARG(kTemp, kernelBP, kernelIndBPSubIter, sensitivityBuffer);
-#elif defined(CUDA) || defined(HIP)
-			KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[uu]);
-#elif defined(OPENCL)
 			KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[ee]);
-#endif // END CUDA
 			KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, d_N[ii]);
 			KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, d[ii]);
 			KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, b[ii]);
 			KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, bmax[ii]);
-			if ((inputScalars.subsetType == 3 || inputScalars.subsetType == 6 || inputScalars.subsetType == 7) && inputScalars.subsetsUsed > 1 && inputScalars.listmode == 0) {
+			if ((inputScalars.subsetType == 3 || inputScalars.subsetType == 6 || inputScalars.subsetType == 7) && inputScalars.subsets > 1 && !inputScalars.CT && !inputScalars.SPECT && !inputScalars.PET && inputScalars.listmode == 0) {
 				KARG_METAL_SLOT(kernelIndBPSubIter, 13);
 				KARG(kTemp, kernelBP, kernelIndBPSubIter, d_xyindex[osa_iter]);
 				KARG(kTemp, kernelBP, kernelIndBPSubIter, d_zindex[osa_iter]);
@@ -4938,6 +5054,10 @@ public:
 			KARG_METAL_SLOT(kernelIndBPSubIter, 19);
 			KARG(kTemp, kernelBP, kernelIndBPSubIter, d_output);
 			KARG(kTemp, kernelBP, kernelIndBPSubIter, vec_opencl.d_rhs_os[uu]);
+			if (inputScalars.SPECT) {
+				KARG_METAL_SLOT(kernelIndBPSubIter, 21);
+				KARG(kTemp, kernelBP, kernelIndBPSubIter, d_detectorVector[timestep][osa_iter]);
+			}
 			KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, no_norm);
 			KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, m_size);
 			KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, osa_iter);
@@ -5087,8 +5207,8 @@ public:
 				}
 #if defined(CUDA) || defined(HIP)
 			if (inputScalars.BPType == 4) {
-				global[0] = (inputScalars.Nx[ii] + erotusBP[0][ii]) / local[0];
-				global[1] = (inputScalars.Ny[ii] + erotusBP[1][ii]) / local[1];
+				global[0] = (inputScalars.Nx[ii] + erotusBP[0][ii]) / localBP[0];
+				global[1] = (inputScalars.Ny[ii] + erotusBP[1][ii]) / localBP[1];
 #elif defined(OPENCL) || defined(METAL)
 				if (inputScalars.BPType == 4)
 #endif // END CUDA
@@ -5115,8 +5235,8 @@ public:
 				else if (inputScalars.BPType == 5) {
 #if defined(CUDA) || defined(HIP)
 					if (inputScalars.pitch) {
-						global[0] = (inputScalars.Nx[ii] + erotusBP[0][ii]) / local[0];
-						global[1] = (inputScalars.Ny[ii] + erotusBP[1][ii]) / local[1];
+						global[0] = (inputScalars.Nx[ii] + erotusBP[0][ii]) / localBP[0];
+						global[1] = (inputScalars.Ny[ii] + erotusBP[1][ii]) / localBP[1];
 						global[2] = inputScalars.Nz[ii];
 #elif defined(OPENCL) || defined(METAL)
 					if (inputScalars.pitch)
@@ -5127,14 +5247,14 @@ public:
 					}
 #if defined(CUDA) || defined(HIP)
 				else {
-					global[0] = (inputScalars.Nx[ii] + erotusBP[0][ii]) / local[0];
-					global[1] = (inputScalars.Ny[ii] + erotusBP[1][ii]) / local[1];
+					global[0] = (inputScalars.Nx[ii] + erotusBP[0][ii]) / localBP[0];
+					global[1] = (inputScalars.Ny[ii] + erotusBP[1][ii]) / localBP[1];
 					global[2] = (inputScalars.Nz[ii] + NVOXELS5 - 1) / NVOXELS5;
 				}
 				}
 			else {
-				global[0] = (inputScalars.Nx[ii] + erotusBP[0][ii]) / local[0];
-				global[1] = (inputScalars.Ny[ii] + erotusBP[1][ii]) / local[1];
+				global[0] = (inputScalars.Nx[ii] + erotusBP[0][ii]) / localBP[0];
+				global[1] = (inputScalars.Ny[ii] + erotusBP[1][ii]) / localBP[1];
 				global[2] = inputScalars.Nz[ii];
 			}
 #elif defined(OPENCL) || defined(METAL)
@@ -5143,8 +5263,8 @@ public:
 #endif // END CUDA
 				if (DEBUG) {
 					mexPrintBase("global[0] = %u\n", global[0]);
-					mexPrintBase("local[0] = %u\n", local[0]);
-					mexPrintBase("local[1] = %u\n", local[1]);
+					mexPrintBase("localBP[0] = %u\n", localBP[0]);
+					mexPrintBase("localBP[1] = %u\n", localBP[1]);
 					mexPrintBase("global[1] = %u\n", global[1]);
 					mexPrintBase("global[2] = %u\n", global[2]);
 					mexPrintBase("erotusBP[0] = %u\n", erotusBP[0][ii]);
@@ -5154,7 +5274,7 @@ public:
 #elif defined(OPENCL)
 					mexPrintBase("kernelIndBPSubIter = %u\n", kernelIndBPSubIter);
 					mexPrintBase("global.dimensions() = %u\n", global.dimensions());
-					mexPrintBase("local.dimensions() = %u\n", local.dimensions());
+					mexPrintBase("localBP.dimensions() = %u\n", localBP.dimensions());
 #endif // END CUDA
 					mexPrintBase("m_size = %u\n", m_size);
 					mexPrintBase("nRowsD = %u\n", inputScalars.nRowsD);
@@ -5216,14 +5336,8 @@ public:
 					}
 					else
 						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_z[timestep][osa_iter]);
-#if defined(METAL)
 					KARG_METAL_SLOT(kernelIndBPSubIter, 7);
 					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[ee]);
-#elif defined(CUDA) || defined(HIP)
-					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[uu]);
-#elif defined(OPENCL)
-					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[ee]);
-#endif // END CUDA
 				}
 				else {
 					KARG_METAL_SLOT(kernelIndBPSubIter, 5);
@@ -5251,12 +5365,8 @@ public:
 					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_inputImage);
 					KARG_METAL_SLOT(kernelIndBPSubIter, 4);
 					KARG(kTemp, kernelBP, kernelIndBPSubIter, vec_opencl.d_rhs_os[uu]);
-#if defined(METAL) || defined(OPENCL)
 					KARG_METAL_SLOT(kernelIndBPSubIter, 7);
 					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[ee]);
-#elif defined(CUDA) || defined(HIP)
-					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[uu]);
-#endif // END CUDA
 					if (inputScalars.meanBP) {
 						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_meanBP);
 					}
@@ -5276,23 +5386,27 @@ public:
 						inputScalars.nRowsD + erotus[0],
 						inputScalars.nColsD + erotus[1],
 						length[indD],
-						local);
+						localBP);
 				}
 				else if (inputScalars.listmode > 0 && compSens) {
 					SET_LAUNCH_RANGE3(global, static_cast<size_t>(inputScalars.det_per_ring) + erotusSens[0],
 						static_cast<size_t>(inputScalars.det_per_ring) + erotusSens[1], 
-						static_cast<size_t>(inputScalars.rings) * static_cast<size_t>(inputScalars.rings), local);
+						static_cast<size_t>(inputScalars.rings) * static_cast<size_t>(inputScalars.rings), localBP);
 				}
 				else {
 					erotus[0] = length[indD] % local_size[0];
 					if (erotus[0] > 0)
 						erotus[0] = (local_size[0] - erotus[0]);
-					SET_LAUNCH_RANGE3(global, length[indD] + erotus[0], 1, 1, local);
+					// See the matching comment in forwardProjection: this launch is measurement driven and its
+					// global range is 1D, so the 2D member range (forced to {16, 16} by fastPDHG for
+					// projector types 4 and 5) has to be flattened, or global[1] == 1 is indivisible by it.
+					SET_RANGE2(localBP, local_size[0], 1);
+					SET_LAUNCH_RANGE3(global, length[indD] + erotus[0], 1, 1, localBP);
 				}
 				if (DEBUG) {
 					mexPrintBase("global[0] = %u\n", global[0]);
-					mexPrintBase("local[0] = %u\n", local[0]);
-					mexPrintBase("local[1] = %u\n", local[1]);
+					mexPrintBase("localBP[0] = %u\n", localBP[0]);
+					mexPrintBase("localBP[1] = %u\n", localBP[1]);
 					mexPrintBase("global[1] = %u\n", global[1]);
 					mexPrintBase("global[2] = %u\n", global[2]);
 					if (compSens) {
@@ -5307,7 +5421,7 @@ public:
 					mexPrintBase("kernelIndBPSubIter = %u\n", BPArgs.size());
 #elif defined(OPENCL)
 					mexPrintBase("global.dimensions() = %u\n", global.dimensions());
-					mexPrintBase("local.dimensions() = %u\n", local.dimensions());
+					mexPrintBase("localBP.dimensions() = %u\n", localBP.dimensions());
 					mexPrintBase("kernelIndBPSubIter = %u\n", kernelIndBPSubIter);
 #endif // END CUDA
 					mexPrintBase("m_size = %u\n", m_size);
@@ -5348,10 +5462,10 @@ public:
 					}
 					else
 						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_x[timestep][osa_iter]);
-					if ((inputScalars.CT || inputScalars.PET || inputScalars.SPECT || (inputScalars.listmode > 0 && !inputScalars.indexBased))) {
+					if ((inputScalars.CT || inputScalars.PET || inputScalars.SPECT)) {
 						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_z[timestep][osa_iter]);
 					}
-					else if (inputScalars.indexBased || inputScalars.listmode > 0) {
+					else if (inputScalars.listmode > 0) {
 						KARG(kTemp, kernelBP, kernelIndBPSubIter, d_z[0][0]);
 					}
 					else
@@ -5362,13 +5476,13 @@ public:
 						KARG_METAL_SLOT(kernelIndBPSubIter, 7);
 						if (inputScalars.useBuffers) {
 							int subset = 0;
-							if (inputScalars.maskFPZ > 1)
+							if (inputScalars.maskFPZ > 1 && !(inputScalars.SPECT && inputScalars.maskFPZ == inputScalars.nHeads))
 								subset = osa_iter;
 							KARG(kTemp, kernelBP, kernelIndBPSubIter, d_maskFPB[timestep][subset]);
 						}
 						else
 							if (inputScalars.maskFPZ > 1) {
-								KARG(kTemp, kernelBP, kernelIndBPSubIter, d_maskFP3[timestep][osa_iter]);
+								KARG(kTemp, kernelBP, kernelIndBPSubIter, (inputScalars.SPECT && inputScalars.maskFPZ == inputScalars.nHeads) ? d_maskFP3[timestep][0] : d_maskFP3[timestep][osa_iter]);
 							}
 							else
 								KARG(kTemp, kernelBP, kernelIndBPSubIter, d_maskFP);
@@ -5388,7 +5502,7 @@ public:
 					}
 				}
 				KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, length[indD]);
-				if ((inputScalars.subsetType == 3 || inputScalars.subsetType == 6 || inputScalars.subsetType == 7) && inputScalars.subsetsUsed > 1 && inputScalars.listmode == 0) {
+				if ((inputScalars.subsetType == 3 || inputScalars.subsetType == 6 || inputScalars.subsetType == 7) && inputScalars.subsets > 1 && !inputScalars.CT && !inputScalars.SPECT && !inputScalars.PET && inputScalars.listmode == 0) {
 					KARG_METAL_SLOT(kernelIndBPSubIter, 9);
 					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_xyindex[osa_iter]);
 					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_zindex[osa_iter]);
@@ -5429,12 +5543,8 @@ public:
 					KARG_METAL_SLOT(kernelIndBPSubIter, 14);
 					KARG(kTemp, kernelBP, kernelIndBPSubIter, d_scat[timestep][osa_iter]);
 				}
-#if defined(METAL) || defined(OPENCL)
 				KARG_METAL_SLOT(kernelIndBPSubIter, 15);
 				KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[ee]);
-#elif defined(CUDA) || defined(HIP)
-				KARG(kTemp, kernelBP, kernelIndBPSubIter, d_Summ[uu]);
-#endif // END CUDA
 				}
 			KARG_SCALAR(kTemp, kernelBP, kernelIndBPSubIter, no_norm);
 			if (inputScalars.CT && inputScalars.maskBP && (inputScalars.BPType == 4 || inputScalars.BPType == 5 || inputScalars.BPType == 7)) {
@@ -5548,15 +5658,15 @@ public:
 			CUDA_CHECK(status, "Failed to record main stream event\n", -1);
 			status = cuStreamWaitEvent(sideQueues[queueIdx - 1], evMain, 0);
 			CUDA_CHECK(status, "Failed to make side stream wait for the main stream\n", -1);
-			status = cuLaunchKernel(kernelBP, global[0], global[1], global[2], local[0], local[1], local[2], 0, sideQueues[queueIdx - 1], kTemp.data(), 0);
+			status = cuLaunchKernel(kernelBP, global[0], global[1], global[2], localBP[0], localBP[1], localBP[2], 0, sideQueues[queueIdx - 1], kTemp.data(), 0);
 		}
 		else
-			status = cuLaunchKernel(kernelBP, global[0], global[1], global[2], local[0], local[1], local[2], 0, CLCommandQueue[0], kTemp.data(), 0);
+			status = cuLaunchKernel(kernelBP, global[0], global[1], global[2], localBP[0], localBP[1], localBP[2], 0, CLCommandQueue[0], kTemp.data(), 0);
 		CUDA_CHECK(status, "Failed to launch backprojection kernel\n", -1);
 #elif defined(METAL)
 		{
-			const MTL::Size threadsPerThreadgroup = MTL::Size::Make(local[0], local[1], local[2]);
-			const MTL::Size threadgroupsPerGrid = MTL::Size::Make(global[0] / local[0], global[1] / local[1], global[2] / local[2]);
+			const MTL::Size threadsPerThreadgroup = MTL::Size::Make(localBP[0], localBP[1], localBP[2]);
+			const MTL::Size threadgroupsPerGrid = MTL::Size::Make(global[0] / localBP[0], global[1] / localBP[1], global[2] / localBP[2]);
 			encoder->dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup);
 			encoder->endEncoding();
 			commandBuffer->commit();
@@ -5582,13 +5692,13 @@ public:
 			std::vector<cl::Event> waitList = { evMain };
 			status = sideQueues[queueIdx - 1].enqueueBarrierWithWaitList(&waitList);
 			OCL_CHECK(status, "Failed to enqueue side queue barrier\n", -1);
-			status = sideQueues[queueIdx - 1].enqueueNDRangeKernel(kernelBP, cl::NDRange(), global, local, NULL);
+			status = sideQueues[queueIdx - 1].enqueueNDRangeKernel(kernelBP, cl::NDRange(), global, localBP, NULL);
 			OCL_CHECK(status, "\n", -1);
 			status = sideQueues[queueIdx - 1].flush();
 			OCL_CHECK(status, "Failed to flush side queue\n", -1);
 		}
 		else {
-			status = CLCommandQueue[0].enqueueNDRangeKernel(kernelBP, cl::NDRange(), global, local, NULL);
+			status = CLCommandQueue[0].enqueueNDRangeKernel(kernelBP, cl::NDRange(), global, localBP, NULL);
 			OCL_CHECK(status, "\n", -1);
 		}
 #endif // END CUDA

@@ -2,6 +2,76 @@
 """
 Created on Thu Jul 10 13:17:22 2025
 """
+import numpy as np
+
+
+def _coordinate_slice(self, name, timestep, subset, stride):
+    """Return one frame/subset coordinate slice in kernel order."""
+    frames = getattr(self, name + 'Frames', None)
+    if isinstance(frames, list) and len(frames) == int(self.Nt):
+        frame = np.asarray(frames[timestep], dtype=np.float32).ravel(order='F')
+        offsets = np.concatenate(([0], np.cumsum(self.nProjSubset[timestep], dtype=np.int64)))
+        start = int(offsets[subset]) * stride
+        stop = int(offsets[subset + 1]) * stride
+        return frame[start:stop]
+    flat = np.asarray(getattr(self, name), dtype=np.float32).ravel(order='F')
+    q = timestep * int(self.subsets) + subset
+    start = int(self.nMeas[q]) * stride
+    stop = int(self.nMeas[q + 1]) * stride
+    return flat[start:stop]
+
+
+def _full_coordinate_frame(self, name, timestep):
+    frames = getattr(self, name + 'Frames', None)
+    if isinstance(frames, list) and len(frames) == int(self.Nt):
+        return np.asarray(frames[timestep], dtype=np.float32).ravel(order='F')
+    return np.asarray(getattr(self, name), dtype=np.float32).ravel(order='F')
+
+
+def _initialize_coordinate_buffers(self, upload):
+    """Create the canonical ``[timestep][subset]`` geometry buffers."""
+    self.d_x = [[None] * self.subsets for _ in range(self.Nt)]
+    self.d_z = [[None] * self.subsets for _ in range(self.Nt)]
+    z_stride = 6 if self.pitch else (3 if self.PET and getattr(self, 'nLayers', 0) > 1 else 2)
+    subset_geometry = (self.CT or self.SPECT) and self.listmode == 0
+    pet_geometry = self.PET and self.listmode == 0
+    for timestep in range(self.Nt):
+        if subset_geometry or (self.listmode > 0 and not self.useIndexBasedReconstruction and self.loadTOF):
+            for subset in range(self.subsets):
+                self.d_x[timestep][subset] = upload(
+                    _coordinate_slice(self, 'x', timestep, subset, 6)
+                )
+        else:
+            self.d_x[timestep][0] = upload(_full_coordinate_frame(self, 'x', timestep))
+
+        if subset_geometry or pet_geometry:
+            for subset in range(self.subsets):
+                self.d_z[timestep][subset] = upload(
+                    _coordinate_slice(self, 'z', timestep, subset, z_stride)
+                )
+        elif self.listmode == 0 or (self.listmode > 0 and self.useIndexBasedReconstruction):
+            self.d_z[timestep][0] = upload(_full_coordinate_frame(self, 'z', timestep))
+        else:
+            self.d_z[timestep][0] = upload(np.zeros(1, dtype=np.float32))
+
+
+def _initialize_detector_vector_buffers(self, upload, empty=None):
+    """Create detector-head-index buffers aligned with each frame/subset geometry slice."""
+    self.d_detectorVector = [[empty] * self.subsets for _ in range(self.Nt)]
+    if not self.SPECT:
+        return
+    frames = getattr(self, 'DetectorVectorFrames', None)
+    if not isinstance(frames, list) or len(frames) != self.Nt:
+        frames = [np.asarray(self.DetectorVector, dtype=np.uint32).reshape(-1)] * self.Nt
+    for timestep in range(self.Nt):
+        frame = np.asarray(frames[timestep], dtype=np.uint32).reshape(-1)
+        offsets = np.concatenate(([0], np.cumsum(self.nProjSubset[timestep], dtype=np.int64)))
+        if frame.size != int(offsets[-1]):
+            raise ValueError('DetectorVector does not match the reordered projections in a SPECT timeframe.')
+        for subset in range(self.subsets):
+            self.d_detectorVector[timestep][subset] = upload(
+                frame[int(offsets[subset]) : int(offsets[subset + 1])]
+            )
 
 def computeGeom5(x, uv, nRowsD, nColsD, dPitchY, pitch):
     """
@@ -37,6 +107,7 @@ def computeGeom5(x, uv, nRowsD, nColsD, dPitchY, pitch):
     return np.ascontiguousarray(geom).ravel()
 
 def initProjector(self):
+    self.CTAttenuation = self.CT_attenuation # TODO: consistent CT_attenuation vs CTAttenuation?
     try:
         import arrayfire as af
     except ModuleNotFoundError:
@@ -59,10 +130,17 @@ def initProjector(self):
         raise ValueError('Arrayfire and PyTorch cannot be used at the same time! Select only one!')
     if self.useTorch:
         import torch
-        torch.cuda.init()
-        self.useCuPy = True
-    if self.useTorch and not self.useCUDA:
-        raise ValueError('PyTorch does not work with OpenCL! You can still use OpenCL manually with PyTorch, but you have to manually transfer the OpenCL data first to host (NumPy array) and then to Torch (or vice versa, i.e. Torch --> NumPy --> OpenCL)')
+        if self.useMetal:
+            if self.useCUDA:
+                raise ValueError('Select either Metal/MPS or CUDA, not both.')
+            if not torch.backends.mps.is_available():
+                raise RuntimeError('PyTorch MPS is not available on this machine.')
+            self.useCuPy = False
+        else:
+            torch.cuda.init()
+            self.useCuPy = True
+    if self.useTorch and not self.useCUDA and not self.useMetal:
+        raise ValueError('PyTorch with the OMEGA OpenCL backend would require host staging. Select CUDA or the native Metal/MPS backend.')
     if self.useCuPy and self.useCUDA:
         import cupy as cp
     elif self.useCuPy and not self.useCUDA:
@@ -85,7 +163,7 @@ def initProjector(self):
                 return "rocm" in lower or "hip" in lower
             except Exception:
                 return False
-    if not self.useCUDA:
+    if not self.useCUDA and not self.useMetal:
         import pyopencl as cl
         from pyopencl.version import VERSION
         
@@ -110,7 +188,11 @@ def initProjector(self):
         self.empty_weight = False
     if self.TOF_bins_used == 0:
         self.TOF_bins_used = 1
-    mDataFound = self.SinM.size > 0
+    mDataFound = (
+        any(np.asarray(frame).size > 0 for frame in self.SinM)
+        if isinstance(self.SinM, list)
+        else self.SinM.size > 0
+    )
     loadCorrections(self)
     parseInputs(self, mDataFound)
     prepassPhase(self)
@@ -194,24 +276,28 @@ def initProjector(self):
         elif self.BPType in [5]:
             with open(headerDir + 'projectorType5.cl', encoding="utf8") as f:
                 linesBP = f.read()
-        globalSize = [None] * self.subsets
+        frame_count = int(getattr(self, 'Nt', 1))
+        globalSize = [[None] * self.subsets for _ in range(frame_count)]
         # self.mSize = [None] * self.subsets
-        for i in range(self.subsets):
-            if (self.FPType == 5):
-                globalSize[i] = (self.nRowsD, (self.nColsD + self.NVOXELSFP - 1) // self.NVOXELSFP, self.nProjSubset[i].item())
-                localSize = (16, 16, 1)
-                erotus = (localSize[0] - (globalSize[i][0] % localSize[0]), localSize[1] - (globalSize[i][1] % localSize[1]), 0)
-                globalSize[i] = (self.nRowsD + erotus[0], (self.nColsD + self.NVOXELSFP - 1) // self.NVOXELSFP + erotus[1], self.nProjSubset[i].item())
-            elif ((self.CT or self.SPECT or self.PET) and self.listmode == 0):
-                globalSize[i] = (self.nRowsD, self.nColsD, self.nProjSubset[i].item())
-                localSize = (16, 16, 1)
-                erotus = (localSize[0] - (globalSize[i][0] % localSize[0]), localSize[1] - (globalSize[i][1] % localSize[1]), 0)
-                globalSize[i] = (self.nRowsD + erotus[0], self.nColsD + erotus[1], self.nProjSubset[i].item())
-            else:
-                globalSize[i] = (self.nMeasSubset[i].item(), 1, 1)
-                localSize = (128, 1, 1)
-                erotus = (localSize[0] - (globalSize[i][0] % localSize[0]), localSize[1] - (globalSize[i][1] % localSize[1]), 0)
-                globalSize[i] = (self.nMeasSubset[i].item() + erotus[0], 1, 1)
+        for timestep in range(frame_count):
+            for i in range(self.subsets):
+                n_proj = int(self.nProjSubset[timestep, i])
+                n_meas = int(self.nMeasSubset[timestep, i])
+                if (self.FPType == 5):
+                    globalSize[timestep][i] = (self.nRowsD, (self.nColsD + self.NVOXELSFP - 1) // self.NVOXELSFP, n_proj)
+                    localSize = (16, 16, 1)
+                    erotus = (localSize[0] - (globalSize[timestep][i][0] % localSize[0]), localSize[1] - (globalSize[timestep][i][1] % localSize[1]), 0)
+                    globalSize[timestep][i] = (self.nRowsD + erotus[0], (self.nColsD + self.NVOXELSFP - 1) // self.NVOXELSFP + erotus[1], n_proj)
+                elif ((self.CT or self.SPECT or self.PET) and self.listmode == 0):
+                    globalSize[timestep][i] = (self.nRowsD, self.nColsD, n_proj)
+                    localSize = (16, 16, 1)
+                    erotus = (localSize[0] - (globalSize[timestep][i][0] % localSize[0]), localSize[1] - (globalSize[timestep][i][1] % localSize[1]), 0)
+                    globalSize[timestep][i] = (self.nRowsD + erotus[0], self.nColsD + erotus[1], n_proj)
+                else:
+                    globalSize[timestep][i] = (n_meas, 1, 1)
+                    localSize = (128, 1, 1)
+                    erotus = (localSize[0] - (globalSize[timestep][i][0] % localSize[0]), localSize[1] - (globalSize[timestep][i][1] % localSize[1]), 0)
+                    globalSize[timestep][i] = (n_meas + erotus[0], 1, 1)
         self.globalSizeFP = globalSize.copy()
         self.localSizeFP = localSize + tuple()
         self.erotusBP = [0] * (self.nMultiVolumes + 1) * 2
@@ -224,31 +310,45 @@ def initProjector(self):
                 self.erotusBP[ii * 2 + 1] = localSize[1] - apu[1]
         
         if self.BPType in [1, 2, 3] or (self.BPType == 4 and not self.CT):
-            globalSize = [[None] * (self.nMultiVolumes + 1)] * self.subsets
-            for i in range(self.subsets):
-                for ii in range(self.nMultiVolumes + 1):
-                    globalSize[i][ii] = self.globalSizeFP[i]
+            globalSize = [
+                [[None] * (self.nMultiVolumes + 1) for _ in range(self.subsets)]
+                for _ in range(frame_count)
+            ]
+            for timestep in range(frame_count):
+                for subset in range(self.subsets):
+                    for ii in range(self.nMultiVolumes + 1):
+                        globalSize[timestep][subset][ii] = self.globalSizeFP[timestep][subset]
             self.localSizeBP = self.localSizeFP + tuple()
         else:
-            globalSize = [[None] * (self.nMultiVolumes + 1)] * self.subsets
-            for i in range(self.subsets):
-                for ii in range(self.nMultiVolumes + 1):
-                    if self.BPType == 4:
-                        globalSize[i][ii] = (self.Nx[ii].item() + self.erotusBP[ii * 2], self.Ny[ii].item() + self.erotusBP[ii * 2 + 1], (self.Nz[ii].item()  + self.NVOXELS - 1) // self.NVOXELS)
-                    elif self.BPType == 5:
-                        if self.pitch:
-                            globalSize[i][ii] = (self.Nx[ii].item() + self.erotusBP[ii * 2], self.Ny[ii].item() + self.erotusBP[ii * 2 + 1], self.Nz[ii].item())
+            globalSize = [
+                [[None] * (self.nMultiVolumes + 1) for _ in range(self.subsets)]
+                for _ in range(frame_count)
+            ]
+            for timestep in range(frame_count):
+                for subset in range(self.subsets):
+                    for ii in range(self.nMultiVolumes + 1):
+                        if self.BPType == 4:
+                            globalSize[timestep][subset][ii] = (self.Nx[ii].item() + self.erotusBP[ii * 2], self.Ny[ii].item() + self.erotusBP[ii * 2 + 1], (self.Nz[ii].item()  + self.NVOXELS - 1) // self.NVOXELS)
+                        elif self.BPType == 5:
+                            if self.pitch:
+                                globalSize[timestep][subset][ii] = (self.Nx[ii].item() + self.erotusBP[ii * 2], self.Ny[ii].item() + self.erotusBP[ii * 2 + 1], self.Nz[ii].item())
+                            else:
+                                globalSize[timestep][subset][ii] = (self.Nx[ii].item() + self.erotusBP[ii * 2], self.Ny[ii].item() + self.erotusBP[ii * 2 + 1], (self.Nz[ii].item()  + self.NVOXELS5 - 1) // self.NVOXELS5)
                         else:
-                            globalSize[i][ii] = (self.Nx[ii].item() + self.erotusBP[ii * 2], self.Ny[ii].item() + self.erotusBP[ii * 2 + 1], (self.Nz[ii].item()  + self.NVOXELS5 - 1) // self.NVOXELS5)
-                    else:
-                        globalSize[i][ii] = (self.Nx[ii].item() + self.erotusBP[ii * 2], self.Ny[ii].item() + self.erotusBP[ii * 2 + 1], self.Nz[ii].item())
+                            globalSize[timestep][subset][ii] = (self.Nx[ii].item() + self.erotusBP[ii * 2], self.Ny[ii].item() + self.erotusBP[ii * 2 + 1], self.Nz[ii].item())
             self.localSizeBP = localSize + tuple()
         self.globalSizeBP = globalSize.copy()
                             
         
         self.Nxy = self.Nx[0].item() * self.Ny[0].item()
         vendor = ''
-        if self.useCUDA:
+        if self.useMetal:
+            # The Metal branch compiles FP/BP source once below. The
+            # existing bOpt logic remains the single source of specialization.
+            bOpt = ('-DMETAL',)
+            self.use_64bit_atomics = False
+            self.use_32bit_atomics = False
+        elif self.useCUDA:
             if self.use_64bit_atomics or self.use_32bit_atomics:
                 self.use_64bit_atomics = False
                 self.use_32bit_atomics = False
@@ -275,7 +375,9 @@ def initProjector(self):
                 self.use_32bit_atomics = False
                 bOpt += ('-DINTEL',)
         if self.useMAD:
-            if self.useCUDA and cupyROCm():
+            if self.useMetal:
+                bOpt += ('-DUSEMAD',)
+            elif self.useCUDA and cupyROCm():
                 bOpt += ('-ffast-math','-DUSEMAD',)
             elif self.useCUDA:
                 bOpt += ('--use_fast_math','-DUSEMAD',)
@@ -307,6 +409,10 @@ def initProjector(self):
             bOpt += ('-DMASKFP',)
             if self.maskFPZ > 1:
                 bOpt += ('-DMASKFP3D',)
+        if self.SPECT and self.maskFPZ == self.nHeads:
+            bOpt += ('-DMASKFPBYDETECTOR',)
+        if self.normalization_correction and self.SPECT and self.normZ == self.nHeads:
+            bOpt += ('-DNORMBYDETECTOR',)
         if self.useMaskBP:
             bOpt += ('-DMASKBP',)
             if self.maskBPZ > 1:
@@ -352,7 +458,7 @@ def initProjector(self):
             bOpt += ('-DINDEXBASED',)
         if self.listmode > 0 and ~self.useIndexBasedReconstruction and not vendor == 'NVIDIA Corporation':
             bOpt += ('-DUSEGLOBAL',)
-        else:
+        elif not self.useMetal:
             bOpt += ('-DUSEGLOBAL',)
         if (((self.FPType == 1 or self.BPType == 1 or self.FPType == 4 or self.BPType == 4) and self.n_rays_transaxial * self.n_rays_axial > 1) or self.SPECT):
             bOpt += ('-DN_RAYS=' + str(self.n_rays_transaxial * self.n_rays_axial),)
@@ -453,6 +559,19 @@ def initProjector(self):
             self.d_gFilter = af.interop.np_to_af_array(self.gFilter)
         self.uu = 0
     
+    if self.useMetal:
+        # Compile FP + BP
+        from omegatomo.projector.mps_backend import init_mps_projector
+        init_mps_projector(
+            self,
+            source_root=headerDir,
+            source_fp=linesFP,
+            source_bp=linesBP,
+            options_fp=bOptFP,
+            options_bp=bOptBP,
+        )
+        return
+
     if self.useCUDA:
         self.no_norm = 1
         self.mSize = self.nRowsD * self.nColsD * self.nProjections
@@ -463,58 +582,27 @@ def initProjector(self):
         self.dSize = [None] * (self.nMultiVolumes + 1)
         self.d_Scale = [None] * (self.nMultiVolumes + 1)
         self.d_Scale4 = [None] * (self.nMultiVolumes + 1)
-        self.d_x = [None] * self.subsets
-        self.d_z = [None] * self.subsets
         if self.projector_type != 6:
             if self.useCuPy:
                 # if self.FPType == 5:
                 #     raise ValueError('Not yet supported')
                 self.d_Sens = cp.empty(shape=(1,1), dtype=cp.float32)
-                if (self.listmode == 0 and not (self.CT or self.SPECT)) or self.useIndexBasedReconstruction:
-                    self.d_x[0] = cp.asarray(self.x.ravel())
-                elif (self.CT or self.SPECT) and self.listmode == 0:
-                    apu = self.x.ravel()
-                    for i in range(self.subsets):
-                        self.d_x[i] = cp.asarray(apu[self.nMeas[i] * 6 : self.nMeas[i + 1] * 6])
-                elif self.listmode > 0 and not self.useIndexBasedReconstruction:
-                    apu = self.x.ravel()
-                    for i in range(self.subsets):
-                        if self.loadTOF:
-                            self.d_x[i] = cp.asarray(apu[self.nMeas[i] * 6 : self.nMeas[i + 1] * 6])
-                if ((self.CT or self.SPECT) and self.listmode == 0):
-                    if self.pitch:
-                        kerroin = 6
-                    else:
-                        kerroin = 2
-                    apu = self.z.ravel()
-                    for i in range(self.subsets):
-                        self.d_z[i] = cp.asarray(apu[self.nMeas[i] * kerroin : self.nMeas[i + 1] * kerroin])
-                else:
-                    if (self.PET and self.listmode == 0):
-                        if self.nLayers > 1:
-                            kerroin = 3
-                        else:
-                            kerroin = 2
-                        apu = self.z.ravel()
-                        for i in range(self.subsets):
-                            self.d_z[i] = cp.asarray(apu[self.nMeas[i] * kerroin : self.nMeas[i + 1] * kerroin])
-                    elif self.listmode == 0 or (self.listmode > 0 and self.useIndexBasedReconstruction):
-                        self.d_z[0] = cp.asarray(self.z.ravel())
-                    else:
-                        for i in range(self.subsets):
-                            self.d_z[i] = cp.asarray(np.zeros(1,dtype=np.float32))
+                _initialize_coordinate_buffers(self, lambda value: cp.asarray(value))
                 # Precomputed per-projection geometry for the BDD backprojection (see -DGEOM5 in projectorType5.cl)
                 if self.BPType == 5 and self.CT and self.listmode == 0:
-                    self.d_geom5 = [None] * self.subsets
-                    apuG = self.x.ravel()
-                    apuG2 = self.z.ravel()
-                    if self.pitch:
-                        kerroin = 6
-                    else:
-                        kerroin = 2
-                    for i in range(self.subsets):
-                        geom = computeGeom5(apuG[self.nMeas[i] * 6 : self.nMeas[i + 1] * 6], apuG2[self.nMeas[i] * kerroin : self.nMeas[i + 1] * kerroin], self.nRowsD, self.nColsD, self.dPitchY, self.pitch)
-                        self.d_geom5[i] = cp.asarray(geom)
+                    self.d_geom5 = [[None] * self.subsets for _ in range(self.Nt)]
+                    kerroin = 6 if self.pitch else 2
+                    for timestep in range(self.Nt):
+                        for subset in range(self.subsets):
+                            geom = computeGeom5(
+                                _coordinate_slice(self, 'x', timestep, subset, 6),
+                                _coordinate_slice(self, 'z', timestep, subset, kerroin),
+                                self.nRowsD,
+                                self.nColsD,
+                                self.dPitchY,
+                                self.pitch,
+                            )
+                            self.d_geom5[timestep][subset] = cp.asarray(geom)
                 if (self.attenuation_correction and not self.CTAttenuation):
                     self.d_atten = [None] * self.subsets
                     for i in range(self.subsets):
@@ -540,8 +628,15 @@ def initProjector(self):
                     else:
                         chl = cp.cuda.texture.ChannelFormatDescriptor(8,0,0,0, cp.cuda.runtime.cudaChannelFormatKindUnsigned)
                         self.maskFP = self.maskFP.ravel('F')
-                        if self.maskFPZ > 1:
-                            self.d_maskFP = [] * self.subsets
+                        if self.SPECT and self.maskFPZ > 1 and self.maskFPZ == self.nHeads:
+                            array = cp.cuda.texture.CUDAarray(chl, self.nRowsD, self.nColsD, self.nHeads)
+                            array.copy_from(self.maskFP.reshape((self.nHeads, self.nColsD, self.nRowsD)))
+                            res = cp.cuda.texture.ResourceDescriptor(cp.cuda.runtime.cudaResourceTypeArray, cuArr=array)
+                            tdes= cp.cuda.texture.TextureDescriptor(addressModes=(cp.cuda.runtime.cudaAddressModeClamp, cp.cuda.runtime.cudaAddressModeClamp,cp.cuda.runtime.cudaAddressModeClamp),
+                                                                    filterMode=cp.cuda.runtime.cudaFilterModePoint, normalizedCoords=0)
+                            self.d_maskFP = cp.cuda.texture.TextureObject(res, tdes)
+                        elif self.maskFPZ > 1:
+                            self.d_maskFP = [None] * self.subsets
                             for i in range(self.subsets):
                                 array = cp.cuda.texture.CUDAarray(chl, self.nRowsD, self.nColsD, self.nMeas[i])
                                 self.maskFP = self.maskFP.reshape((self.nMeas[i], self.nColsD, self.nRowsD))
@@ -580,6 +675,7 @@ def initProjector(self):
                         self.d_maskBP = cp.cuda.texture.TextureObject(res, tdes)
                 if self.TOF:
                     self.d_TOFCenter = cp.asarray(self.TOFCenter)
+                _initialize_detector_vector_buffers(self, lambda value: cp.asarray(value))
                 if self.SPECT:
                     self.d_rayShiftsDetector = cp.asarray(self.rayShiftsDetector)
                     self.d_rayShiftsSource = cp.asarray(self.rayShiftsSource)
@@ -588,7 +684,10 @@ def initProjector(self):
                 if (self.normalization_correction):
                     self.d_norm = [None] * self.subsets
                     for i in range(self.subsets):
-                        self.d_norm[i] = cp.asarray(self.normalization[self.nTotMeas[i].item() : self.nTotMeas[i + 1].item()])
+                        if self.SPECT and self.normZ == self.nHeads:
+                            self.d_norm[i] = cp.asarray(self.normalization)
+                        else:
+                            self.d_norm[i] = cp.asarray(self.normalization[self.nTotMeas[i].item() : self.nTotMeas[i + 1].item()])
                 if (self.additionalCorrection):
                     self.d_corr = [None] * self.subsets
                     for i in range(self.subsets):
@@ -653,8 +752,6 @@ def initProjector(self):
                     else:
                         self.kIndF += (cp.float32(self.tube_radius),)
                     self.kIndF += (cp.float32(self.bmin), cp.float32(self.bmax), cp.float32(self.Vmax),)
-                if self.useMaskFP:
-                    self.kIndF += (self.d_maskFP,)
                 if self.FPType in [1, 2, 3]:
                     if self.TOF:
                         self.kIndF += (self.d_TOFCenter, )
@@ -734,53 +831,25 @@ def initProjector(self):
                         if k == 0:
                             self.dSizeBP = cl.cltypes.make_float2(self.dSizeXBP, self.dSizeZBP)
             self.d_dPitch = cl.cltypes.make_float2(self.dPitchX, self.dPitchY)
-            self.d_x = [None] * self.subsets
-            self.d_z = [None] * self.subsets
-            if (self.listmode == 0 and not (self.CT or self.SPECT)) or self.useIndexBasedReconstruction:
-                self.d_x[0] = cl.array.to_device(self.queue, self.x.ravel())
-            elif (self.CT or self.SPECT) and self.listmode == 0:
-                apu = self.x.ravel()
-                for i in range(self.subsets):
-                    self.d_x[i] = cl.array.to_device(self.queue, apu[self.nMeas[i] * 6 : self.nMeas[i + 1] * 6])
-            elif self.listmode > 0 and not self.useIndexBasedReconstruction:
-                apu = self.x.ravel()
-                for i in range(self.subsets):
-                    if self.loadTOF:
-                        self.d_x[i] = cl.array.to_device(self.queue, apu[self.nMeas[i] * 6 : self.nMeas[i + 1] * 6])
-            if ((self.CT or self.SPECT) and self.listmode == 0):
-                if self.pitch:
-                    kerroin = 6
-                else:
-                    kerroin = 2
-                apu = self.z.ravel()
-                for i in range(self.subsets):
-                    self.d_z[i] = cl.array.to_device(self.queue, apu[self.nMeas[i] * kerroin : self.nMeas[i + 1] * kerroin])
-            else:
-                if (self.PET and self.listmode == 0):
-                    if self.nLayers > 1:
-                        kerroin = 3
-                    else:
-                        kerroin = 2
-                    apu = self.z.ravel()
-                    for i in range(self.subsets):
-                        self.d_z[i] = cl.array.to_device(self.queue, apu[self.nMeas[i] * kerroin : self.nMeas[i + 1] * kerroin])
-                elif self.listmode == 0 or (self.listmode > 0 and self.useIndexBasedReconstruction):
-                    self.d_z[0] = cl.array.to_device(self.queue, self.z.ravel())
-                else:
-                    for i in range(self.subsets):
-                        self.d_z[i] = cl.array.to_device(self.queue, np.zeros(1,dtype=np.float32))
+            _initialize_coordinate_buffers(
+                self,
+                lambda value: cl.array.to_device(self.queue, value),
+            )
             # Precomputed per-projection geometry for the BDD backprojection (see -DGEOM5 in projectorType5.cl)
             if self.BPType == 5 and self.CT and self.listmode == 0:
-                self.d_geom5 = [None] * self.subsets
-                apuG = self.x.ravel()
-                apuG2 = self.z.ravel()
-                if self.pitch:
-                    kerroin = 6
-                else:
-                    kerroin = 2
-                for i in range(self.subsets):
-                    geom = computeGeom5(apuG[self.nMeas[i] * 6 : self.nMeas[i + 1] * 6], apuG2[self.nMeas[i] * kerroin : self.nMeas[i + 1] * kerroin], self.nRowsD, self.nColsD, self.dPitchY, self.pitch)
-                    self.d_geom5[i] = cl.array.to_device(self.queue, geom)
+                self.d_geom5 = [[None] * self.subsets for _ in range(self.Nt)]
+                kerroin = 6 if self.pitch else 2
+                for timestep in range(self.Nt):
+                    for subset in range(self.subsets):
+                        geom = computeGeom5(
+                            _coordinate_slice(self, 'x', timestep, subset, 6),
+                            _coordinate_slice(self, 'z', timestep, subset, kerroin),
+                            self.nRowsD,
+                            self.nColsD,
+                            self.dPitchY,
+                            self.pitch,
+                        )
+                        self.d_geom5[timestep][subset] = cl.array.to_device(self.queue, geom)
             if (self.attenuation_correction and not self.CTAttenuation):
                 self.d_atten = [None] * self.subsets
                 for i in range(self.subsets):
@@ -795,13 +864,19 @@ def initProjector(self):
                 else:
                     self.d_atten = cl.array.to_device(self.queue, self.vaimennus)
                 # self.d_atten = cl.image_from_array(self.clctx, np.reshape(self.vaimennus, (self.Nx[0].item(), self.Ny[0].item(), self.Nz[0].item()), order='F'))
+            _initialize_detector_vector_buffers(self, lambda value: cl.array.to_device(self.queue, value))
             if self.SPECT:
                 self.d_rayShiftsDetector = cl.array.to_device(self.queue, self.rayShiftsDetector)
                 self.d_rayShiftsSource = cl.array.to_device(self.queue, self.rayShiftsSource)
             if self.useMaskFP:
                 imformat = cl.ImageFormat(cl.channel_order.A, cl.channel_type.UNSIGNED_INT8)
-                if self.maskFPZ > 1:
-                    self.d_maskFP = [] * self.subsets
+                if self.SPECT and self.maskFPZ > 1 and self.maskFPZ == self.nHeads:
+                    if VERSION[0] > 2024 or (VERSION[0] == 2024 and VERSION[1] > 2):
+                        self.d_maskFP = cl.create_image(self.clctx, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, imformat, hostbuf=self.maskFP, shape=(self.nRowsD, self.nColsD, self.nHeads))
+                    else:
+                        self.d_maskFP = cl.Image(self.clctx, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, imformat, hostbuf=self.maskFP, shape=(self.nRowsD, self.nColsD, self.nHeads))
+                elif self.maskFPZ > 1:
+                    self.d_maskFP = [None] * self.subsets
                     for i in range(self.subsets):
                         if VERSION[0] > 2024 or (VERSION[0] == 2024 and VERSION[1] > 2):
                             self.d_maskFP[i] = cl.create_image(self.clctx, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, imformat, hostbuf=self.maskFP, shape=(self.nRowsD, self.nColsD, self.nMeas[i]))
@@ -833,7 +908,10 @@ def initProjector(self):
             if (self.normalization_correction):
                 self.d_norm = [None] * self.subsets
                 for i in range(self.subsets):
-                    self.d_norm[i] = cl.array.to_device(self.queue, self.normalization[self.nTotMeas[i].item() : self.nTotMeas[i + 1].item()])
+                    if self.SPECT and self.normZ == self.nHeads:
+                        self.d_norm[i] = cl.array.to_device(self.queue, self.normalization)
+                    else:
+                        self.d_norm[i] = cl.array.to_device(self.queue, self.normalization[self.nTotMeas[i].item() : self.nTotMeas[i + 1].item()])
             if (self.additionalCorrection):
                 self.d_corr = [None] * self.subsets
                 for i in range(self.subsets):

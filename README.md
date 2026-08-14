@@ -242,15 +242,14 @@ The following features can be used as independent functions without any input ne
 Here is a list of features that should appear in future releases:
 
 - Test suite
-- Additional SPECT features
-    - Dynamic SPECT reconstruction
-    - Built-in support for more collimator geometries
+- Extended dynamic reconstruction support
 - PET scatter correction based on SSS
 - Improved support for curved helical CT
 - Better support for analytical methods
 - Improved dual-layer PET support
 - Potential fp16 support
 - Deep learning based features
+  - MATLAB gpuArray input datatype for custom operators
 
 ## Known Issues and Limitations
 

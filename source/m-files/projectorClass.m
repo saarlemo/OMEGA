@@ -482,13 +482,13 @@ classdef projectorClass
                 end
                 obj.param.useMaskFP = true;
                 obj.param.maskFPZ = sum(maskProjectionCounts);
-            elseif isfield(obj.param, 'maskFP') && numel(obj.param.maskFP) > 1 && ((numel(obj.param.maskFP) ~= obj.param.nRowsD * obj.param.nColsD && numel(obj.param.maskFP) ~= obj.param.nRowsD * obj.param.nColsD * expectedMaskProjections && (obj.param.CT || obj.param.SPECT)) || (numel(obj.param.maskFP) ~= obj.param.Nang * obj.param.Ndist && numel(obj.param.maskFP) ~= obj.param.Nang * obj.param.Ndist * obj.param.NSinos && ~obj.param.CT && ~obj.param.SPECT))
+            elseif isfield(obj.param, 'maskFP') && numel(obj.param.maskFP) > 1 && ((numel(obj.param.maskFP) ~= obj.param.nRowsD * obj.param.nColsD && numel(obj.param.maskFP) ~= obj.param.nRowsD * obj.param.nColsD * expectedMaskProjections && ~(obj.param.SPECT && numel(obj.param.maskFP) == obj.param.nRowsD * obj.param.nColsD * obj.param.nHeads) && (obj.param.CT || obj.param.SPECT)) || (numel(obj.param.maskFP) ~= obj.param.Nang * obj.param.Ndist && numel(obj.param.maskFP) ~= obj.param.Nang * obj.param.Ndist * obj.param.NSinos && ~obj.param.CT && ~obj.param.SPECT))
                 if obj.param.CT || obj.param.SPECT
-                    error(['Incorrect size for the forward projection mask! Must be the size of a single projection image [' num2str(obj.param.nRowsD) ' ' num2str(obj.param.nColsD) '] or full stack of [' num2str(obj.param.nRowsD) ' ' num2str(obj.param.nColsD)  ' ' num2str(expectedMaskProjections) ']'])
+                    error(['Incorrect size for the forward projection mask! Must be the size of a single projection image [' num2str(obj.param.nRowsD) ' ' num2str(obj.param.nColsD) '] , full stack of [' num2str(obj.param.nRowsD) ' ' num2str(obj.param.nColsD)  ' ' num2str(expectedMaskProjections) '] or detector-head stack of [' num2str(obj.param.nRowsD) ' ' num2str(obj.param.nColsD)  ' ' num2str(obj.param.nHeads) ']'])
                 else
                     error(['Incorrect size for the forward projection mask! Must be the size of a single sinogram image [' num2str(obj.param.nRowsD) ' ' num2str(obj.param.nColsD) '] or all sinograms [' num2str(obj.param.nRowsD) ' ' num2str(obj.param.nColsD) ' ' num2str(obj.param.NSinos) ']'])
                 end
-            elseif isfield(obj.param, 'maskFP') && numel(obj.param.maskFP) > 1 && (numel(obj.param.maskFP) == obj.param.nRowsD * obj.param.nColsD || numel(obj.param.maskFP) == obj.param.nRowsD * obj.param.nColsD * expectedMaskProjections)
+            elseif isfield(obj.param, 'maskFP') && numel(obj.param.maskFP) > 1 && (numel(obj.param.maskFP) == obj.param.nRowsD * obj.param.nColsD || numel(obj.param.maskFP) == obj.param.nRowsD * obj.param.nColsD * expectedMaskProjections || (obj.param.SPECT && numel(obj.param.maskFP) == obj.param.nRowsD * obj.param.nColsD * obj.param.nHeads))
                 obj.param.useMaskFP = true;
                 obj.param.maskFPZ = size(obj.param.maskFP,3);
             else

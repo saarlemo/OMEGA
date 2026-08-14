@@ -147,10 +147,13 @@ if options.subsets > 1 && options.subset_type > 0
         end
     end
     if options.normalization_correction && options.corrections_during_reconstruction
-        if options.use_raw_data == false && options.NSinos ~= options.TotSinos && ~iscell(options.normalization)
+        detectorIndexedNorm = options.SPECT && options.normZ == options.nHeads;
+        if options.use_raw_data == false && options.NSinos ~= options.TotSinos && ~iscell(options.normalization) && ~detectorIndexedNorm
             options.normalization = options.normalization(1:options.NSinos*options.Ndist*options.Nang);
         end
-        if options.subset_type >= 8
+        if detectorIndexedNorm
+            options.normalization = options.normalization(:);
+        elseif options.subset_type >= 8
             if iscell(index)
                 options.normalization = reorderDynamicProjectionData(options.normalization, index, ...
                     options.Ndist, options.Nang, 'normalization images');
@@ -265,7 +268,21 @@ if options.subsets > 1 && options.subset_type > 0
             options.CT_attenuation = true;
         end
     end
-    if options.useMaskFP && options.maskFPZ > 1 && options.subset_type >= 8
+    if options.SPECT && isfield(options, 'DetectorVector') && options.subset_type >= 8
+        if iscell(index)
+            projectionCounts = double(options.nProjectionsPerFrame(:));
+            detectorOffsets = [0; cumsum(projectionCounts)];
+            detectorVector = uint32(options.DetectorVector(:));
+            selectedVectors = cell(numel(index), 1);
+            for tt = 1 : numel(index)
+                selectedVectors{tt} = detectorVector(detectorOffsets(tt) + index{tt});
+            end
+            options.DetectorVector = vertcat(selectedVectors{:});
+        else
+            options.DetectorVector = uint32(options.DetectorVector(index));
+        end
+    end
+    if options.useMaskFP && options.maskFPZ > 1 && options.maskFPZ ~= options.nHeads && options.subset_type >= 8
         if iscell(index)
             options.maskFP = uint8(reorderDynamicProjectionData(options.maskFP, index, ...
                 options.nRowsD, options.nColsD, 'forward projection masks'));

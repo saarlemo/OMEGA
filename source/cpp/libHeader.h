@@ -33,6 +33,8 @@ struct inputStruct {
     uint32_t nColsD;
     // Number of rows in the projection image/sinogram
     uint32_t nRowsD;
+    // Number of SPECT detector heads
+    uint32_t nHeads = 1;
     // Number of angular samples in the sinogram
     uint32_t Nang;
     // Number of radial distances in the sinogram
@@ -128,6 +130,8 @@ struct inputStruct {
     uint32_t DiffusionType;
     // POCS TV iteration number
     uint32_t POCS_NgradIter;
+    // Number of detector-indexed normalization images
+    uint32_t normZ = 1;
     // Number of slices in mask images
     uint32_t maskFPZ = 1;
     uint32_t maskBPZ = 1;
@@ -520,6 +524,7 @@ struct inputStruct {
     // SPECT values
     float* rayShiftsDetector;
     float* rayShiftsSource;
+    uint32_t* detectorVector;
     float coneOfResponseStdCoeffA;
     float coneOfResponseStdCoeffB;
     float coneOfResponseStdCoeffC;
@@ -659,6 +664,7 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
 
     // The size of the first dimension in the input sinogram/projection
     inputScalars.nRowsD = options.nRowsD;
+    inputScalars.nHeads = options.nHeads;
 
     inputScalars.verbose = options.verbose;
 
@@ -830,11 +836,12 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
         inputScalars.T = options.offsetVal;
     inputScalars.nProjections = options.nProjections;
     inputScalars.subsetType = options.subsetType;
+    inputScalars.d_Scale4.resize(inputScalars.nMultiVolumes + 1);
+    inputScalars.dSize.resize(inputScalars.nMultiVolumes + 1);
+    inputScalars.d_Scale.resize(inputScalars.nMultiVolumes + 1);
     if (inputScalars.FPType == 4 || inputScalars.FPType == 5 || inputScalars.BPType == 4 || inputScalars.BPType == 5) {
         inputScalars.dL = options.dL;
-        inputScalars.d_Scale4.resize(inputScalars.nMultiVolumes + 1);
-        inputScalars.dSize.resize(inputScalars.nMultiVolumes + 1);
-        inputScalars.d_Scale.resize(inputScalars.nMultiVolumes + 1);
+        
         float* dScaleX4 = options.dScaleX4;
         float* dScaleY4 = options.dScaleY4;
         float* dScaleZ4 = options.dScaleZ4;
@@ -890,7 +897,7 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
         if (inputScalars.useHelical)
             inputScalars.helicalRadius = options.helicalRadius;
     }
-	else if (inputScalars.SPECT && (inputScalars.projector_type == 1 || inputScalars.projector_type == 2 || inputScalars.projector_type == 22 || inputScalars.projector_type == 11)) {
+	else if (inputScalars.SPECT && (inputScalars.projector_type == 1 || inputScalars.projector_type == 2 || inputScalars.projector_type == 3 || inputScalars.projector_type == 22 || inputScalars.projector_type == 11 || inputScalars.projector_type == 13 || inputScalars.projector_type == 23 || inputScalars.projector_type == 33 || inputScalars.projector_type == 31 || inputScalars.projector_type == 32)) {
         inputScalars.nColsD = options.nColsD;
         inputScalars.nRowsD = options.nRowsD;
         inputScalars.coneOfResponseStdCoeffA = options.coneOfResponseStdCoeffA;
@@ -948,6 +955,9 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
         w_vec.maskFP = options.maskFP;
         inputScalars.maskFPZ = options.maskFPZ;
     }
+    if (inputScalars.normalization_correction) {
+        inputScalars.normZ = options.normZ;
+    }
     if (inputScalars.maskBP) {
         w_vec.maskBP = options.maskBP;
         inputScalars.maskBPZ = options.maskBPZ;
@@ -959,22 +969,20 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
     else if (inputScalars.maskBP)
         w_vec.maskPrior = options.maskBP;
     // CT-related variables such as number of projection images
+    w_vec.nProjections = options.nProjections;
     if (inputScalars.CT) {
-        w_vec.nProjections = options.nProjections;
         w_vec.dPitchX = options.dPitchX;
         w_vec.dPitchY = options.dPitchY;
     } else if (inputScalars.SPECT) {
-        w_vec.nProjections = options.nProjections;
 		w_vec.dPitchX = options.dPitchX;
 		w_vec.dPitchY = options.dPitchY;
-		if (inputScalars.projector_type == 1 || inputScalars.projector_type == 2 || inputScalars.projector_type == 22 || inputScalars.projector_type == 11) {
+		if (inputScalars.FPType == 1 || inputScalars.FPType == 2 || inputScalars.FPType == 3 || inputScalars.BPType == 1 || inputScalars.BPType == 2 || inputScalars.BPType == 3) {
 			w_vec.rayShiftsDetector = options.rayShiftsDetector;
 			w_vec.rayShiftsSource = options.rayShiftsSource;
+			w_vec.detectorVector = options.detectorVector;
 		}
     } else {
-        w_vec.nProjections = options.nProjections;
-        // Detector pitch
-        w_vec.dPitchX = options.cr_p;
+        w_vec.dPitchX = options.cr_p; // Detector pitch
         w_vec.dPitchY = options.cr_pz;
     }
     if (inputScalars.FPType == 4 || inputScalars.BPType == 4)
@@ -1256,7 +1264,7 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
         w_vec.U = options.U;
     }
     if (DEBUG && (MethodList.MRAMLA || MethodList.MBSREM || MethodList.SPS || MethodList.RAMLA || MethodList.BSREM || MethodList.ROSEM || MethodList.ROSEMMAP || MethodList.PKMA)) {
-        mexPrintBase("w_vec.lambda[0] = %f\n", w_vec.lambda[0]);
+        mexPrintBase("w_vec.lambda[0][0] = %f\n", w_vec.lambda[0][0]);
         mexEval();
     }
     if (w_vec.precondTypeIm[3])
@@ -1377,8 +1385,8 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
         inputScalars.FISTAType = options.FISTAType;
         if (DEBUG) {
             mexPrint("CPType loaded");
-            mexPrintBase("w_vec.sigma2CP = %d\n", w_vec.sigma2CP[0]);
-            mexPrintBase("w_vec.sigmaCP = %d\n", w_vec.sigmaCP[0]);
+            mexPrintBase("w_vec.sigma2CP = %d\n", w_vec.sigma2CP[0][0]);
+            mexPrintBase("w_vec.sigmaCP = %d\n", w_vec.sigmaCP[0][0]);
             mexPrintBase("w_vec.alpha1CPTGV = %d\n", w_vec.alpha1CPTGV);
             mexPrintBase("w_vec.alpha0CPTGV = %d\n", w_vec.alpha0CPTGV);
             mexPrintBase("options.sigma2CP = %d\n", options.sigma2CP[0]);

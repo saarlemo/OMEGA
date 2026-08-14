@@ -5,7 +5,7 @@
 * Unlike the non-OpenCL versions, this one uses (32-bit) floats and thus
 * can be slightly more inaccurate.
 * 
-* Copyright(C) 2020-2024 Ville-Veikko Wettenhovi
+* Copyright(C) 2020-2026 Ville-Veikko Wettenhovi
 *
 * This program is free software: you can redistribute it and/or modify
 * it under the terms of the GNU General Public License as published by
@@ -457,10 +457,21 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 	if (DEBUG) {
 		mexPrint("Reconstruction methods obtained");
 	}
-	if (inputScalars.listmode)
-		w_vec.listCoord = getSingles(options, "x", 0);
+	// Add index-based reconstruction support
+	if (inputScalars.listmode) {
+		if (inputScalars.indexBased) {
+			w_vec.trIndex = getUint16s(options, "trIndex", 0);
+			w_vec.axIndex = getUint16s(options, "axIndex", 0);
+		}
+		else {
+			w_vec.listCoord = getSingles(options, "x", 0);
+		}
+		if (inputScalars.TOF)
+			w_vec.TOFIndices = getUint8s(options, "TOFIndices", 0);
+	}
 
 	const float* Sino = getSingles(Sin, "solu");
+	inputScalars.size_meas = mxGetNumberOfElements(Sin);
 	const float* randoms = getSingles(sc_ra, "solu");
 	const float* extraCorr = getSingles(options, "ScatterC", 0);
 	const float* x0 = getSingles(options, "x0");

@@ -1563,8 +1563,8 @@ DEVICE void getDetectorCoordinatesSPECT(
     const FLOAT2 d_dPitch, // Detector element size [mm]
     const CLGLOBAL float* d_rayShiftsDetector, // Ray shifts [mm]
     const CLGLOBAL float* d_rayShiftsSource, // Ray shifts [mm]
-    int lorXY,
-    size_t idx,
+    const CLGLOBAL uint* d_detectorVector, // Detector head for each projection
+    int lor,
     const FLOAT3 totalFOVmin, // FOV boundary including all multiresolution volumes
     const FLOAT3 totalFOVmax // FOV boundary including all multiresolution volumes
 ) {
@@ -1577,7 +1577,9 @@ DEVICE void getDetectorCoordinatesSPECT(
     ); // Amount of shift from sinogram center to current detector element
 	
     id = i.z * NA; // Index of d_uv (detector panel normal vector)
-    uint idShift = 2*lorXY + (2*N_RAYS) * idx; // Index of rayShiftsDetector
+    const uint detectorElement = i.x + i.y * d_size_x;
+    const uint detectorHead = d_detectorVector[i.z];
+    uint idShift = 2*lor + (2*N_RAYS) * detectorElement + detectorHead * d_size_x * d_sizey; // Index of rayShiftsDetector
 
 	const FLOAT apuX = d_uv[id]; // X component of detector panel normal vector
 	const FLOAT apuY = d_uv[id + 1]; // Y component of detector panel normal vector

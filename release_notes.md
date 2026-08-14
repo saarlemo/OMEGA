@@ -13,9 +13,35 @@ Metal features:
 - Projector type 4 supports texture input with Metal
 - `options.useMAD` selects the Metal math mode
 
-Metal bug fixes:
+New examples:
+- SPECT_main_DIP_PyTorch.py
+  - Deep image prior regularized SPECT reconstruction example
+  - Highlights OMEGA interoperability with PyTorch framework
+  - Tested with Metal (M4) and CUDA (RTX 4060)
+
+New features:
+- CUDA support for MATLAB projection operators
+  - `options.use_CUDA` controls the backend as with implementation 2
+- Initial Metal support for PyTorch projection operators
+  - SPECT only, no corrections (yet)
+  - See PyTorch examples
+- Metal support for reconstructions with ArrayFire backend (both Python and MATLAB)
+- Memory optimization for SPECT
+  - These arrays can now be input as size nRowsD * nColsD * nHeads (one image for each detector head):
+    - FP mask
+    - BP mask
+    - Normalization image / detector uniformity image
+  - These arrays have to be input as size 2 * n_rays_transaxial * n_rays_axial x nRowsD x nColsD x nHeads (one image for each detector head):
+    - rayShiftsSource
+    - rayShiftsDetector
+- SPECT multi-ray projector now uses ```options.n_rays_transaxial``` and ```options.n_rays_axial``` as used in sinogram reconstructions with other modalities
+  - The old ```options.nRays``` is still supported, but not recommended to use.
+  - ```options.nRays=n^2``` converts silently into values of ```options.n_rays_transaxial=n``` and ```options.n_rays_axial=n```
+
+Bug fixes:
 - Fixed texture input for standalone Metal projector calls
 - Fixed the missing Metal definition for projector type 4
+
 
 ## OMEGA v2.3.0
 

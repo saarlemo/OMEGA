@@ -5,7 +5,17 @@ Created on Thu Jul 10 13:25:14 2025
 
 import numpy as np
 
+def _mask_fp_resource(self, subset):
+    if self.SPECT and self.maskFPZ == self.nHeads:
+        return self.d_maskFP
+    if self.maskFPZ > 1:
+        return self.d_maskFP[subset]
+    return self.d_maskFP
+
+
 def conv3D(self, f, ii = 0):
+    if getattr(self, "useMetal", False):
+        raise NotImplementedError("The separate PSF convolution kernel is not yet wired to the Metal/MPS bridge.")
     globalSize = (self.Nx[ii].item() + self.erotusBP[ii * 2], self.Ny[ii].item() + self.erotusBP[ii * 2 + 1], self.Nz[ii].item())
     kInd = 0
     if self.useCUDA:
@@ -83,21 +93,30 @@ def conv3D(self, f, ii = 0):
         af.device.unlock_array(output)
     return output
 
-def forwardProjection(self, f, subset = -1):
+def forwardProjection(self, f, subset: int = -1, timestep: int = -1):
     if subset == -1:
         subset = self.subset
+    if timestep == -1:
+        timestep = self.timestep
+    timestep = int(timestep)
+    subset = int(subset)
+    if getattr(self, "useMetal", False):
+        from omegatomo.projector.mps_backend import forward_projection_mps
+        return forward_projection_mps(self, f, subset, timestep)
+    if getattr(self, "useCUDA", False) and not getattr(self, "useCuPy", False):
+        raise ValueError('PyCUDA is no longer supported. Please use CuPy.')
     volumes = 0
     if self.projector_type == 6:
         if not self.useCUDA:
             import arrayfire as af
-            u1 = np.sum(self.nProjSubset[:subset])
-            y = af.data.constant(0., self.nRowsD, self.nColsD, self.nProjSubset[subset].item())
+            u1 = int(np.sum(self.nProjSubset[:timestep, :])) + int(np.sum(self.nProjSubset[timestep, :subset]))
+            y = af.data.constant(0., self.nRowsD, self.nColsD, self.nProjSubset[timestep, subset].item())
             for ii in range(self.nMultiVolumes + 1):
                 if isinstance(f,list):
                     apuArr = af.data.moddims(f[ii], self.Nx[ii].item(), self.Ny[ii].item(), self.Nz[ii].item())
                 else:
                     apuArr = af.data.moddims(f, self.Nx[ii].item(), self.Ny[ii].item(), self.Nz[ii].item())
-                for kk in range(self.nProjSubset[subset].item()):
+                for kk in range(self.nProjSubset[timestep, subset].item()):
                     # 1. Rotate the image
                     kuvaRot = af.image.rotate(apuArr, (-self.swivelAngles[u1].item())*np.pi/180, method=af.INTERP.BILINEAR)
                     
@@ -127,14 +146,14 @@ def forwardProjection(self, f, subset = -1):
                 from torchvision.transforms.functional import rotate
                 from torchvision.transforms import InterpolationMode
                 import torch.nn.functional as F
-                u1 = np.sum(self.nProjSubset[:subset])
-                y = torch.zeros((self.nProjSubset[subset].item(), self.nColsD, self.nRowsD), dtype=torch.float32).cuda()
+                u1 = int(np.sum(self.nProjSubset[:timestep, :])) + int(np.sum(self.nProjSubset[timestep, :subset]))
+                y = torch.zeros((self.nProjSubset[timestep, subset].item(), self.nColsD, self.nRowsD), dtype=torch.float32).cuda()
                 for ii in range(self.nMultiVolumes + 1):
                     if isinstance(f,list):
                         apuArr = torch.reshape(f[ii], (self.Nz[ii].item(), self.Ny[ii].item(), self.Nx[ii].item()))
                     else:
                         apuArr = torch.reshape(f, (self.Nz[ii].item(), self.Ny[ii].item(), self.Nx[ii].item()))
-                    for kk in range(self.nProjSubset[subset].item()):
+                    for kk in range(self.nProjSubset[timestep, subset].item()):
                         # 1. Rotate the image
                         kuvaRot = rotate(apuArr, (-self.swivelAngles[u1].item())*np.pi/180, InterpolationMode.BILINEAR)
                         kuvaRot = torch.permute(kuvaRot, (2,1,0))
@@ -172,23 +191,23 @@ def forwardProjection(self, f, subset = -1):
                 import cupy as cp
                 if not self.loadTOF:
                     if self.useIndexBasedReconstruction and self.listmode > 0:
-                        self.d_trIndex[0] = cp.asarray(self.trIndex[self.nMeas[subset] * 2 : self.nMeas[subset + 1] * 2])
-                        self.d_axIndex[0] = cp.asarray(self.axIndex[self.nMeas[subset] * 2 : self.nMeas[subset + 1] * 2])
+                        self.d_trIndex[0] = cp.asarray(self.trIndex[self.nMeas[timestep * self.subsets + subset] * 2 : self.nMeas[timestep * self.subsets + subset + 1] * 2])
+                        self.d_axIndex[0] = cp.asarray(self.axIndex[self.nMeas[timestep * self.subsets + subset] * 2 : self.nMeas[timestep * self.subsets + subset + 1] * 2])
                     elif self.listmode > 0:
                         apu = self.x.ravel()
-                        self.d_x[0] = cp.asarray(apu[self.nMeas[subset] * 6 : self.nMeas[subset + 1] * 6])
+                        self.d_x[timestep][0] = cp.asarray(apu[self.nMeas[timestep * self.subsets + subset] * 6 : self.nMeas[timestep * self.subsets + subset + 1] * 6])
                 if self.useTorch:
                     import torch
                     if self.subsetType > 7 or self.subsets == 1:
-                        y = torch.zeros(self.nRowsD * self.nColsD * self.nProjSubset[subset].item(), dtype=torch.float32, device='cuda')
+                        y = torch.zeros(self.nRowsD * self.nColsD * self.nProjSubset[timestep, subset].item(), dtype=torch.float32, device='cuda')
                     else:
-                        y = torch.zeros(self.nMeasSubset[subset].item(), dtype=torch.float32, device='cuda')
+                        y = torch.zeros(self.nMeasSubset[timestep, subset].item(), dtype=torch.float32, device='cuda')
                     yD = cp.asarray(y)
                 else:
                     if self.subsetType > 7 or self.subsets == 1:
-                        y = cp.zeros(self.nRowsD * self.nColsD * self.nProjSubset[subset].item(), dtype=cp.float32)
+                        y = cp.zeros(self.nRowsD * self.nColsD * self.nProjSubset[timestep, subset].item(), dtype=cp.float32)
                     else:
-                        y = cp.zeros(self.nMeasSubset[subset].item(), dtype=cp.float32)
+                        y = cp.zeros(self.nMeasSubset[timestep, subset].item(), dtype=cp.float32)
                 for k in range(self.nMultiVolumes + 1):
                     if isinstance(f,list):
                         if self.use_psf:
@@ -293,19 +312,16 @@ def forwardProjection(self, f, subset = -1):
                         else:
                             kIndLoc += (y,)
                         if (self.listmode == 0 and not self.CT):
-                            kIndLoc += (self.d_x[0],)
+                            kIndLoc += (self.d_x[timestep][0],)
                         else:
-                            kIndLoc += (self.d_x[subset], )
+                            kIndLoc += (self.d_x[timestep][subset], )
                         if (self.CT or self.PET or self.listmode > 0):
-                            kIndLoc += (self.d_z[subset],)
+                            kIndLoc += (self.d_z[timestep][subset],)
                         else:
-                            kIndLoc += (self.d_z[0],)
+                            kIndLoc += (self.d_z[timestep][0],)
                         if self.useMaskFP:
-                            if self.maskFPZ > 1:
-                                kIndLoc += (self.d_maskFP[subset],)
-                            else:
-                                kIndLoc += (self.d_maskFP,)
-                        kIndLoc += (cp.int64(self.nProjSubset[subset].item()),)
+                            kIndLoc += (_mask_fp_resource(self, subset),)
+                        kIndLoc += (cp.int64(self.nProjSubset[timestep, subset].item()),)
                         if ((self.subsetType == 3 or self.subsetType == 6 or self.subsetType == 7) and self.subsets > 1 and self.listmode == 0):
                             kIndLoc += (self.d_xyindex[subset],)
                             kIndLoc += (self.d_zindex[subset],)
@@ -314,12 +330,12 @@ def forwardProjection(self, f, subset = -1):
                         if (self.additionalCorrection):
                             kIndLoc += (self.d_corr[subset],)
                         kIndLoc += (cp.uint8(self.no_norm),)
-                        kIndLoc += (cp.uint64(self.nMeasSubset[subset].item()),)
+                        kIndLoc += (cp.uint64(self.nMeasSubset[timestep, subset].item()),)
                         kIndLoc += (cp.uint32(subset),)
                         kIndLoc += (cp.int32(k),)
                     elif self.FPType == 5:
-                        kIndLoc += (self.d_x[subset], )
-                        kIndLoc += (self.d_z[subset],)
+                        kIndLoc += (self.d_x[timestep][subset], )
+                        kIndLoc += (self.d_z[timestep][subset],)
                         # self.knlF.set_arg(kIndLoc, d_im)
                         # kIndLoc += 1
                         # self.knlF.set_arg(kIndLoc, d_imInt)
@@ -330,28 +346,22 @@ def forwardProjection(self, f, subset = -1):
                         else:
                             kIndLoc += (y,)
                         if self.useMaskFP:
-                            if self.maskFPZ > 1:
-                                kIndLoc += (self.d_maskFP[subset],)
-                            else:
-                                kIndLoc += (self.d_maskFP,)
-                        kIndLoc += (cp.int64(self.nProjSubset[subset].item()),)
+                            kIndLoc += (_mask_fp_resource(self, subset),)
+                        kIndLoc += (cp.int64(self.nProjSubset[timestep, subset].item()),)
                         # if self.meanFP:
                     elif self.FPType in [1, 2, 3]:
                         if self.useMaskFP:
-                            if self.maskFPZ > 1:
-                                kIndLoc += (self.d_maskFP[subset],)
-                            else:
-                                kIndLoc += (self.d_maskFP,)
+                            kIndLoc += (_mask_fp_resource(self, subset),)
                         if (self.CT or self.PET or self.SPECT) and self.listmode == 0:
-                            kIndLoc += (cp.int64(self.nProjSubset[subset].item()),)
+                            kIndLoc += (cp.int64(self.nProjSubset[timestep, subset].item()),)
                         if (((self.listmode == 0 and not (self.CT or self.SPECT)) or self.useIndexBasedReconstruction)) or (not self.loadTOF and self.listmode > 0):
-                            kIndLoc += (self.d_x[0],)
+                            kIndLoc += (self.d_x[timestep][0],)
                         else:
-                            kIndLoc += (self.d_x[subset], )
+                            kIndLoc += (self.d_x[timestep][subset], )
                         if (self.CT or self.PET or self.SPECT or (self.listmode > 0 and not self.useIndexBasedReconstruction)):
-                            kIndLoc += (self.d_z[subset],)
+                            kIndLoc += (self.d_z[timestep][subset],)
                         else:
-                            kIndLoc += (self.d_z[0],)
+                            kIndLoc += (self.d_z[timestep][0],)
                         if (self.normalization_correction):
                             kIndLoc += (self.d_norm[subset],)
                         if (self.additionalCorrection):
@@ -425,13 +435,13 @@ def forwardProjection(self, f, subset = -1):
                             kIndLoc += (yD,)
                         else:
                             kIndLoc += (y,)
+                        if self.SPECT:
+                            kIndLoc += (self.d_detectorVector[timestep][subset],)
                         kIndLoc += (cp.uint8(self.no_norm),)
-                        kIndLoc += (cp.uint64(self.nMeasSubset[subset].item()),)
+                        kIndLoc += (cp.uint64(self.nMeasSubset[timestep, subset].item()),)
                         kIndLoc += (cp.uint32(subset),)
                         kIndLoc += (cp.int32(k),)
-                    self.knlF((self.globalSizeFP[subset][0] // self.localSizeFP[0], self.globalSizeFP[subset][1] // self.localSizeFP[1], self.globalSizeFP[subset][2]), (self.localSizeFP[0], self.localSizeFP[1], 1),kIndLoc)
-            else:
-                raise ValueError('Unsupported selection. Note that PyCUDA is no longer supported!')
+                    self.knlF((self.globalSizeFP[timestep][subset][0] // self.localSizeFP[0], self.globalSizeFP[timestep][subset][1] // self.localSizeFP[1], self.globalSizeFP[timestep][subset][2]), (self.localSizeFP[0], self.localSizeFP[1], 1),kIndLoc)
             if self.useTorch:
                 torch.cuda.synchronize()
             #     if self.useAF:
@@ -446,24 +456,24 @@ def forwardProjection(self, f, subset = -1):
             from pyopencl.version import VERSION
             if not self.loadTOF:
                 if self.useIndexBasedReconstruction and self.listmode > 0:
-                    self.d_trIndex[0] = cl.array.to_device(self.queue, self.trIndex[self.nMeas[subset] * 2 : self.nMeas[subset + 1] * 2])
-                    self.d_axIndex[0] = cl.array.to_device(self.queue, self.axIndex[self.nMeas[subset] * 2 : self.nMeas[subset + 1] * 2])
+                    self.d_trIndex[0] = cl.array.to_device(self.queue, self.trIndex[self.nMeas[timestep * self.subsets + subset] * 2 : self.nMeas[timestep * self.subsets + subset + 1] * 2])
+                    self.d_axIndex[0] = cl.array.to_device(self.queue, self.axIndex[self.nMeas[timestep * self.subsets + subset] * 2 : self.nMeas[timestep * self.subsets + subset + 1] * 2])
                 elif self.listmode > 0:
                     apu = self.x.ravel()
-                    self.d_x[0] = cl.array.to_device(self.queue, apu[self.nMeas[subset] * 6 : self.nMeas[subset + 1] * 6])
+                    self.d_x[timestep][0] = cl.array.to_device(self.queue, apu[self.nMeas[timestep * self.subsets + subset] * 6 : self.nMeas[timestep * self.subsets + subset + 1] * 6])
             if self.useAF:
                 import arrayfire as af
                 if self.subsetType > 7 or self.subsets == 1:
-                    y = af.data.constant(0., self.nRowsD * self.nColsD * self.nProjSubset[subset].item())
+                    y = af.data.constant(0., self.nRowsD * self.nColsD * self.nProjSubset[timestep, subset].item())
                 else:
-                    y = af.data.constant(0., self.nMeasSubset[subset].item())
+                    y = af.data.constant(0., self.nMeasSubset[timestep, subset].item())
                 yPtr = y.raw_ptr()
                 yD = cl.MemoryObject.from_int_ptr(yPtr)
             else:
                 if self.subsetType > 7 or self.subsets == 1:
-                    y = cl.array.zeros(self.queue, self.nRowsD * self.nColsD * self.nProjSubset[subset].item(), dtype=cl.cltypes.float)
+                    y = cl.array.zeros(self.queue, self.nRowsD * self.nColsD * self.nProjSubset[timestep, subset].item(), dtype=cl.cltypes.float)
                 else:
-                    y = cl.array.zeros(self.queue, self.nMeasSubset[subset].item(), dtype=cl.cltypes.float)
+                    y = cl.array.zeros(self.queue, self.nMeasSubset[timestep, subset].item(), dtype=cl.cltypes.float)
             imformat = cl.ImageFormat(cl.channel_order.A, cl.channel_type.FLOAT)
             mf = cl.mem_flags
             for k in range(self.nMultiVolumes + 1):
@@ -596,22 +606,19 @@ def forwardProjection(self, f, subset = -1):
                         self.knlF.set_arg(kIndLoc, y.data)
                     kIndLoc += 1
                     if (self.listmode == 0 and not self.CT):
-                        self.knlF.set_arg(kIndLoc, self.d_x[0].data)
+                        self.knlF.set_arg(kIndLoc, self.d_x[timestep][0].data)
                     else:
-                        self.knlF.set_arg(kIndLoc, self.d_x[subset].data)
+                        self.knlF.set_arg(kIndLoc, self.d_x[timestep][subset].data)
                     kIndLoc += 1
                     if (self.CT or self.PET or self.listmode > 0):
-                        self.knlF.set_arg(kIndLoc, self.d_z[subset].data)
+                        self.knlF.set_arg(kIndLoc, self.d_z[timestep][subset].data)
                     else:
-                        self.knlF.set_arg(kIndLoc, self.d_z[0].data)
+                        self.knlF.set_arg(kIndLoc, self.d_z[timestep][0].data)
                     kIndLoc += 1
                     if self.useMaskFP:
-                        if self.maskFPZ > 1:
-                            self.knlF.set_arg(kIndLoc, self.d_maskFP[subset])
-                        else:
-                            self.knlF.set_arg(kIndLoc, self.d_maskFP)
+                        self.knlF.set_arg(kIndLoc, _mask_fp_resource(self, subset))
                         kIndLoc += 1
-                    self.knlF.set_arg(kIndLoc, (cl.cltypes.long)(self.nProjSubset[subset].item()))
+                    self.knlF.set_arg(kIndLoc, (cl.cltypes.long)(self.nProjSubset[timestep, subset].item()))
                     kIndLoc += 1
                     if ((self.subsetType == 3 or self.subsetType == 6 or self.subsetType == 7) and self.subsets > 1 and self.listmode == 0):
                         self.knlF.set_arg(kIndLoc, self.d_xyindex[subset].data)
@@ -626,15 +633,15 @@ def forwardProjection(self, f, subset = -1):
                         kIndLoc += 1
                     self.knlF.set_arg(kIndLoc, (cl.cltypes.uchar)(self.no_norm))
                     kIndLoc += 1
-                    self.knlF.set_arg(kIndLoc, (cl.cltypes.ulong)(self.nMeasSubset[subset].item()))
+                    self.knlF.set_arg(kIndLoc, (cl.cltypes.ulong)(self.nMeasSubset[timestep, subset].item()))
                     kIndLoc += 1
                     self.knlF.set_arg(kIndLoc, (cl.cltypes.uint)(subset))
                     kIndLoc += 1
                     self.knlF.set_arg(kIndLoc, (cl.cltypes.int)(k))
                 elif self.FPType == 5:
-                    self.knlF.set_arg(kIndLoc, self.d_x[subset].data)
+                    self.knlF.set_arg(kIndLoc, self.d_x[timestep][subset].data)
                     kIndLoc += 1
-                    self.knlF.set_arg(kIndLoc, self.d_z[subset].data)
+                    self.knlF.set_arg(kIndLoc, self.d_z[timestep][subset].data)
                     kIndLoc += 1
                     self.knlF.set_arg(kIndLoc, d_im)
                     kIndLoc += 1
@@ -646,32 +653,26 @@ def forwardProjection(self, f, subset = -1):
                         self.knlF.set_arg(kIndLoc, y.data)
                     kIndLoc += 1
                     if self.useMaskFP:
-                        if self.maskFPZ > 1:
-                            self.knlF.set_arg(kIndLoc, self.d_maskFP[subset])
-                        else:
-                            self.knlF.set_arg(kIndLoc, self.d_maskFP)
+                        self.knlF.set_arg(kIndLoc, _mask_fp_resource(self, subset))
                         kIndLoc += 1
-                    self.knlF.set_arg(kIndLoc, (cl.cltypes.long)(self.nProjSubset[subset].item()))
+                    self.knlF.set_arg(kIndLoc, (cl.cltypes.long)(self.nProjSubset[timestep, subset].item()))
                     # if self.meanFP:
                 elif self.FPType in [1, 2, 3]:
                     if self.useMaskFP:
-                        if self.maskFPZ > 1:
-                            self.knlF.set_arg(kIndLoc, self.d_maskFP[subset])
-                        else:
-                            self.knlF.set_arg(kIndLoc, self.d_maskFP)
+                        self.knlF.set_arg(kIndLoc, _mask_fp_resource(self, subset))
                         kIndLoc += 1
                     if (self.CT or self.PET or self.SPECT) and self.listmode == 0:
-                        self.knlF.set_arg(kIndLoc, (cl.cltypes.long)(self.nProjSubset[subset].item()))
+                        self.knlF.set_arg(kIndLoc, (cl.cltypes.long)(self.nProjSubset[timestep, subset].item()))
                         kIndLoc += 1
                     if ((self.listmode == 0 or self.useIndexBasedReconstruction) and not (self.CT or self.SPECT)) or (not self.loadTOF and self.listmode > 0):
-                        self.knlF.set_arg(kIndLoc, self.d_x[0].data)
+                        self.knlF.set_arg(kIndLoc, self.d_x[timestep][0].data)
                     else:
-                        self.knlF.set_arg(kIndLoc, self.d_x[subset].data)
+                        self.knlF.set_arg(kIndLoc, self.d_x[timestep][subset].data)
                     kIndLoc += 1
                     if (self.CT or self.PET or self.SPECT or (self.listmode > 0 and not self.useIndexBasedReconstruction)):
-                        self.knlF.set_arg(kIndLoc, self.d_z[subset].data)
+                        self.knlF.set_arg(kIndLoc, self.d_z[timestep][subset].data)
                     else:
-                        self.knlF.set_arg(kIndLoc, self.d_z[0].data)
+                        self.knlF.set_arg(kIndLoc, self.d_z[timestep][0].data)
                     kIndLoc += 1
                     if (self.normalization_correction):
                         self.knlF.set_arg(kIndLoc, self.d_norm[subset].data)
@@ -715,14 +716,17 @@ def forwardProjection(self, f, subset = -1):
                     else:
                         self.knlF.set_arg(kIndLoc, y.data)
                     kIndLoc += 1
+                    if self.SPECT:
+                        self.knlF.set_arg(kIndLoc, self.d_detectorVector[timestep][subset].data)
+                        kIndLoc += 1
                     self.knlF.set_arg(kIndLoc, (cl.cltypes.uchar)(self.no_norm))
                     kIndLoc += 1
-                    self.knlF.set_arg(kIndLoc, (cl.cltypes.ulong)(self.nMeasSubset[subset].item()))
+                    self.knlF.set_arg(kIndLoc, (cl.cltypes.ulong)(self.nMeasSubset[timestep, subset].item()))
                     kIndLoc += 1
                     self.knlF.set_arg(kIndLoc, (cl.cltypes.uint)(subset))
                     kIndLoc += 1
                     self.knlF.set_arg(kIndLoc, (cl.cltypes.int)(k))
-                cl.enqueue_nd_range_kernel(self.queue, self.knlF, self.globalSizeFP[subset], self.localSizeFP)
+                cl.enqueue_nd_range_kernel(self.queue, self.knlF, self.globalSizeFP[timestep][subset], self.localSizeFP)
                 self.queue.finish()
         if volumes > 0 and not(isinstance(f,list)):
             self.nMultiVolumes = volumes
@@ -732,23 +736,32 @@ def forwardProjection(self, f, subset = -1):
                 af.device.unlock_array(f)
     return y
 
-def backwardProjection(self, y, subset = -1):
+def backwardProjection(self, y, subset = -1, timestep = -1):
     if subset == -1:
         subset = self.subset
+    if timestep == -1:
+        timestep = self.timestep
+    timestep = int(timestep)
+    subset = int(subset)
+    if getattr(self, "useMetal", False):
+        from omegatomo.projector.mps_backend import backward_projection_mps
+        return backward_projection_mps(self, y, subset, timestep)
+    if getattr(self, "useCUDA", False) and not getattr(self, "useCuPy", False):
+        raise ValueError('PyCUDA is no longer supported. Please use CuPy.')
     if self.nMultiVolumes > 0:
         f = [None] * (self.nMultiVolumes + 1)
     volumes = 0
     if self.projector_type == 6:
         if not self.useCUDA:
             import arrayfire as af
-            fProj = af.data.moddims(y, self.nRowsD, d1=self.nColsD, d2=self.nProjSubset[subset].item())
+            fProj = af.data.moddims(y, self.nRowsD, d1=self.nColsD, d2=self.nProjSubset[timestep, subset].item())
             for ii in range(self.nMultiVolumes + 1):
-                u1 = np.sum(self.nProjSubset[:subset])
+                u1 = int(np.sum(self.nProjSubset[:timestep, :])) + int(np.sum(self.nProjSubset[timestep, :subset]))
                 if self.nMultiVolumes > 0:
-                    f[ii] = af.data.constant(0, self.Nx[ii].item() * self.Ny[ii].item() * self.Nz[ii].item(), d1 = self.nProjSubset[subset].item())
+                    f[ii] = af.data.constant(0, self.Nx[ii].item() * self.Ny[ii].item() * self.Nz[ii].item(), d1 = self.nProjSubset[timestep, subset].item())
                 else:
-                    f = af.data.constant(0, self.Nx[ii].item() * self.Ny[ii].item() * self.Nz[ii].item(), d1 = self.nProjSubset[subset].item())
-                for kk in range(self.nProjSubset[subset].item()):
+                    f = af.data.constant(0, self.Nx[ii].item() * self.Ny[ii].item() * self.Nz[ii].item(), d1 = self.nProjSubset[timestep, subset].item())
+                for kk in range(self.nProjSubset[timestep, subset].item()):
                     kuvaRot = fProj[:,:,kk] # [128, 96]
                     kuvaRot = af.data.reorder(kuvaRot, 1, 0)
                     
@@ -794,14 +807,14 @@ def backwardProjection(self, y, subset = -1):
                     from torchvision.transforms.functional import rotate
                     from torchvision.transforms import InterpolationMode
                     import torch.nn.functional as F
-                    fProj = torch.reshape(y, (self.nProjSubset[subset].item(), self.nColsD, self.nRowsD))
+                    fProj = torch.reshape(y, (self.nProjSubset[timestep, subset].item(), self.nColsD, self.nRowsD))
                 for ii in range(self.nMultiVolumes + 1):
-                    u1 = np.sum(self.nProjSubset[:subset])
+                    u1 = int(np.sum(self.nProjSubset[:timestep, :])) + int(np.sum(self.nProjSubset[timestep, :subset]))
                     if self.nMultiVolumes > 0:
-                        f[ii] = torch.zeros((self.nProjSubset[subset].item(), self.Nx[ii].item() * self.Ny[ii].item() * self.Nz[ii].item()), dtype=torch.float32).cuda()
+                        f[ii] = torch.zeros((self.nProjSubset[timestep, subset].item(), self.Nx[ii].item() * self.Ny[ii].item() * self.Nz[ii].item()), dtype=torch.float32).cuda()
                     else:
-                        f = torch.zeros((self.nProjSubset[subset].item(), self.Nx[ii].item() * self.Ny[ii].item() * self.Nz[ii].item()), dtype=torch.float32).cuda()
-                    for kk in range(self.nProjSubset[subset].item()):
+                        f = torch.zeros((self.nProjSubset[timestep, subset].item(), self.Nx[ii].item() * self.Ny[ii].item() * self.Nz[ii].item()), dtype=torch.float32).cuda()
+                    for kk in range(self.nProjSubset[timestep, subset].item()):
                         kuvaRot = fProj[kk,:,:]
                         kuvaRot = torch.permute(kuvaRot, (1, 0))
                         
@@ -868,11 +881,11 @@ def backwardProjection(self, y, subset = -1):
                             f = cp.zeros(self.N[k].item(), dtype=cp.float32)
                     if self.BPType == 5:
                         # y1 = cp.asarray(np.load('testi.npy'))
-                        yy = cp.zeros((self.nRowsD+1,self.nColsD+1,self.nProjSubset[subset].item()), dtype=cp.float32, order='F')
+                        yy = cp.zeros((self.nRowsD+1,self.nColsD+1,self.nProjSubset[timestep, subset].item()), dtype=cp.float32, order='F')
                         if self.useTorch:
-                            yy[1:,1:,:] = yD.reshape((self.nRowsD,self.nColsD,self.nProjSubset[subset].item()), order='F')
+                            yy[1:,1:,:] = yD.reshape((self.nRowsD,self.nColsD,self.nProjSubset[timestep, subset].item()), order='F')
                         else:
-                            yy[1:,1:,:] = y.reshape((self.nRowsD,self.nColsD,self.nProjSubset[subset].item()), order='F')
+                            yy[1:,1:,:] = y.reshape((self.nRowsD,self.nColsD,self.nProjSubset[timestep, subset].item()), order='F')
                         yy = yy.cumsum(0)
                         yy = yy.cumsum(1)
                         yy = yy.ravel(order='F')
@@ -881,22 +894,19 @@ def backwardProjection(self, y, subset = -1):
                         if (self.attenuation_correction and not self.CTAttenuation):
                             kIndLoc += (self.d_atten[subset],)
                         if self.useMaskFP:
-                            if self.maskFPZ > 1:
-                                kIndLoc += (self.d_maskFP[subset],)
-                            else:
-                                kIndLoc += (self.d_maskFP,)
+                            kIndLoc += (_mask_fp_resource(self, subset),)
                         if self.useMaskBP:
                             kIndLoc += (self.d_maskBP,)
                         if (self.CT or self.PET or self.SPECT) and self.listmode == 0:
-                            kIndLoc += ((self.nProjSubset[subset].item()),)
+                            kIndLoc += ((self.nProjSubset[timestep, subset].item()),)
                         if ((self.listmode == 0 or self.useIndexBasedReconstruction) and not (self.CT or self.SPECT)) or (not self.loadTOF and self.listmode > 0):
-                            kIndLoc += (self.d_x[0],)
+                            kIndLoc += (self.d_x[timestep][0],)
                         else:
-                            kIndLoc += (self.d_x[subset],)
+                            kIndLoc += (self.d_x[timestep][subset],)
                         if (self.CT or self.PET or self.SPECT or (self.listmode > 0 and not self.useIndexBasedReconstruction)):
-                            kIndLoc += (self.d_z[subset],)
+                            kIndLoc += (self.d_z[timestep][subset],)
                         else:
-                            kIndLoc += (self.d_z[0],)
+                            kIndLoc += (self.d_z[timestep][0],)
                         if (self.normalization_correction):
                             kIndLoc += (self.d_norm[subset],)
                         if (self.additionalCorrection):
@@ -935,8 +945,10 @@ def backwardProjection(self, y, subset = -1):
                                 kIndLoc += (f[k],)
                             else:
                                 kIndLoc += (f,)
+                        if self.SPECT:
+                            kIndLoc += (self.d_detectorVector[timestep][subset],)
                         kIndLoc += (cp.uint8(self.no_norm),)
-                        kIndLoc += (cp.uint64(self.nMeasSubset[subset].item()),)
+                        kIndLoc += (cp.uint64(self.nMeasSubset[timestep, subset].item()),)
                         kIndLoc += (cp.uint32(subset),)
                         kIndLoc += (cp.int32(k),)
                     else:
@@ -968,11 +980,11 @@ def backwardProjection(self, y, subset = -1):
                                 # else:
                                 if self.useImages:
                                     chl = cp.cuda.texture.ChannelFormatDescriptor(32,0,0,0, cp.cuda.runtime.cudaChannelFormatKindFloat)
-                                    array = cp.cuda.texture.CUDAarray(chl, self.nRowsD, self.nColsD, self.nProjSubset[subset].item())
+                                    array = cp.cuda.texture.CUDAarray(chl, self.nRowsD, self.nColsD, self.nProjSubset[timestep, subset].item())
                                     if self.useTorch:
-                                        array.copy_from(yD.reshape((self.nProjSubset[subset].item(), self.nColsD, self.nRowsD)))
+                                        array.copy_from(yD.reshape((self.nProjSubset[timestep, subset].item(), self.nColsD, self.nRowsD)))
                                     else:
-                                        array.copy_from(y.reshape((self.nProjSubset[subset].item(), self.nColsD, self.nRowsD)))
+                                        array.copy_from(y.reshape((self.nProjSubset[timestep, subset].item(), self.nColsD, self.nRowsD)))
                                     res = cp.cuda.texture.ResourceDescriptor(cp.cuda.runtime.cudaResourceTypeArray, cuArr=array)
                                     tdes= cp.cuda.texture.TextureDescriptor(addressModes=(cp.cuda.runtime.cudaAddressModeClamp, cp.cuda.runtime.cudaAddressModeClamp,cp.cuda.runtime.cudaAddressModeClamp), 
                                                                             filterMode=cp.cuda.runtime.cudaFilterModeLinear, normalizedCoords=1)
@@ -990,23 +1002,23 @@ def backwardProjection(self, y, subset = -1):
                                         kIndLoc += (f[k],)
                                     else:
                                         kIndLoc += (f,)
-                                kIndLoc += (self.d_x[subset],)
-                                kIndLoc += (self.d_z[subset],)
+                                kIndLoc += (self.d_x[timestep][subset],)
+                                kIndLoc += (self.d_z[timestep][subset],)
                                 kIndLoc += (self.d_Sens,)
                             else:
-                                kIndLoc += (self.d_x[subset],)
-                                kIndLoc += (self.d_z[subset],)
+                                kIndLoc += (self.d_x[timestep][subset],)
+                                kIndLoc += (self.d_z[timestep][subset],)
                                 # Precomputed geometry; only present when the kernel was built with -DGEOM5
                                 if self.listmode == 0:
-                                    kIndLoc += (self.d_geom5[subset],)
+                                    kIndLoc += (self.d_geom5[timestep][subset],)
                                 # if self.useTorch:
                                 #     kIndLoc += (yD,)
                                 #     kIndLoc += (fD,)
                                 # else:
                                 if self.useImages:
                                     chl = cp.cuda.texture.ChannelFormatDescriptor(32,0,0,0, cp.cuda.runtime.cudaChannelFormatKindFloat)
-                                    array = cp.cuda.texture.CUDAarray(chl, self.nRowsD + 1, self.nColsD + 1, self.nProjSubset[subset].item())
-                                    array.copy_from(yy.reshape((self.nProjSubset[subset].item(), self.nColsD + 1, self.nRowsD + 1)))
+                                    array = cp.cuda.texture.CUDAarray(chl, self.nRowsD + 1, self.nColsD + 1, self.nProjSubset[timestep, subset].item())
+                                    array.copy_from(yy.reshape((self.nProjSubset[timestep, subset].item(), self.nColsD + 1, self.nRowsD + 1)))
                                     res = cp.cuda.texture.ResourceDescriptor(cp.cuda.runtime.cudaResourceTypeArray, cuArr=array)
                                     tdes= cp.cuda.texture.TextureDescriptor(addressModes=(cp.cuda.runtime.cudaAddressModeClamp, cp.cuda.runtime.cudaAddressModeClamp,cp.cuda.runtime.cudaAddressModeClamp), 
                                                                             filterMode=cp.cuda.runtime.cudaFilterModeLinear, normalizedCoords=1)
@@ -1056,21 +1068,18 @@ def backwardProjection(self, y, subset = -1):
                                 else:
                                     kIndLoc += (f,)
                             if self.listmode == 0 and not self.CT:
-                                kIndLoc += (self.d_x[0],)
+                                kIndLoc += (self.d_x[timestep][0],)
                             else:
-                                kIndLoc += (self.d_x[subset],)
+                                kIndLoc += (self.d_x[timestep][subset],)
                             if (self.CT or self.PET or self.listmode > 0):
-                                kIndLoc += (self.d_z[subset],)
+                                kIndLoc += (self.d_z[timestep][subset],)
                             else:
-                                kIndLoc += (self.d_z[0],)
+                                kIndLoc += (self.d_z[timestep][0],)
                             if self.useMaskFP:
-                                if self.maskFPZ > 1:
-                                    kIndLoc += (self.d_maskFP[subset],)
-                                else:
-                                    kIndLoc += (self.d_maskFP,)
+                                kIndLoc += (_mask_fp_resource(self, subset),)
                             if self.useMaskBP:
                                 kIndLoc += (self.d_maskBP,)
-                            kIndLoc += (cp.int64(self.nProjSubset[subset].item()),)
+                            kIndLoc += (cp.int64(self.nProjSubset[timestep, subset].item()),)
                             if ((self.subsetType == 3 or self.subsetType == 6 or self.subsetType == 7) and self.subsets > 1 and self.listmode == 0):
                                 kIndLoc += (self.d_xyindex[subset],)
                                 kIndLoc += (self.d_zindex[subset],)
@@ -1083,14 +1092,12 @@ def backwardProjection(self, y, subset = -1):
                         if self.CT:
                             if self.useMaskBP:
                                 kIndLoc += (self.d_maskBP,)
-                            kIndLoc += (cp.int64(self.nProjSubset[subset].item()),)
+                            kIndLoc += (cp.int64(self.nProjSubset[timestep, subset].item()),)
                         else:
-                            kIndLoc += (cp.uint64(self.nMeasSubset[subset].item()),)
+                            kIndLoc += (cp.uint64(self.nMeasSubset[timestep, subset].item()),)
                             kIndLoc += (cp.uint32(subset),)
                         kIndLoc += (cp.int32(k),)
-                    self.knlB((self.globalSizeBP[subset][k][0] // self.localSizeBP[0], self.globalSizeBP[subset][k][1] // self.localSizeBP[1], self.globalSizeBP[subset][k][2]), (self.localSizeBP[0], self.localSizeBP[1], 1), kIndLoc)
-            else:
-                raise ValueError('Unsupported type. PyCUDA is no longer supported! Use CuPy instead.')
+                    self.knlB((self.globalSizeBP[timestep][subset][k][0] // self.localSizeBP[0], self.globalSizeBP[timestep][subset][k][1] // self.localSizeBP[1], self.globalSizeBP[timestep][subset][k][2]), (self.localSizeBP[0], self.localSizeBP[1], 1), kIndLoc)
             if self.useTorch:
                 torch.cuda.synchronize()
         else:
@@ -1115,19 +1122,19 @@ def backwardProjection(self, y, subset = -1):
                 imformat = cl.ImageFormat(cl.channel_order.A, cl.channel_type.FLOAT)
                 if self.BPType < 5:
                     if VERSION[0] > 2024 or (VERSION[0] == 2024 and VERSION[1] > 2):
-                        d_im = cl.create_image(self.clctx, cl.mem_flags.READ_ONLY, imformat, shape=(self.nRowsD, self.nColsD, self.nProjSubset[subset].item()))
+                        d_im = cl.create_image(self.clctx, cl.mem_flags.READ_ONLY, imformat, shape=(self.nRowsD, self.nColsD, self.nProjSubset[timestep, subset].item()))
                     else:
-                        d_im = cl.Image(self.clctx, cl.mem_flags.READ_ONLY, imformat, shape=(self.nRowsD, self.nColsD, self.nProjSubset[subset].item()))
+                        d_im = cl.Image(self.clctx, cl.mem_flags.READ_ONLY, imformat, shape=(self.nRowsD, self.nColsD, self.nProjSubset[timestep, subset].item()))
                     if self.useAF:
-                        cl.enqueue_copy(self.queue, d_im, yD, offset=(0), origin=(0,0,0), region=(self.nRowsD, self.nColsD, self.nProjSubset[subset].item()));
+                        cl.enqueue_copy(self.queue, d_im, yD, offset=(0), origin=(0,0,0), region=(self.nRowsD, self.nColsD, self.nProjSubset[timestep, subset].item()));
                     else:
-                        cl.enqueue_copy(self.queue, d_im, y.data, offset=(0), origin=(0,0,0), region=(self.nRowsD, self.nColsD, self.nProjSubset[subset].item()));
+                        cl.enqueue_copy(self.queue, d_im, y.data, offset=(0), origin=(0,0,0), region=(self.nRowsD, self.nColsD, self.nProjSubset[timestep, subset].item()));
                 else:
                     if VERSION[0] > 2024 or (VERSION[0] == 2024 and VERSION[1] > 2):
-                        d_im = cl.create_image(self.clctx, cl.mem_flags.READ_ONLY, imformat, shape=(self.nRowsD + 1, self.nColsD + 1, self.nProjSubset[subset].item()))
+                        d_im = cl.create_image(self.clctx, cl.mem_flags.READ_ONLY, imformat, shape=(self.nRowsD + 1, self.nColsD + 1, self.nProjSubset[timestep, subset].item()))
                     else:
-                        d_im = cl.Image(self.clctx, cl.mem_flags.READ_ONLY, imformat, shape=(self.nRowsD + 1, self.nColsD + 1, self.nProjSubset[subset].item()))
-                    y = af.moddims(y, self.nRowsD, d1=self.nColsD, d2=self.nProjSubset[subset].item())
+                        d_im = cl.Image(self.clctx, cl.mem_flags.READ_ONLY, imformat, shape=(self.nRowsD + 1, self.nColsD + 1, self.nProjSubset[timestep, subset].item()))
+                    y = af.moddims(y, self.nRowsD, d1=self.nColsD, d2=self.nProjSubset[timestep, subset].item())
                     if self.meanBP:
                         d_meanBP = af.mean(af.mean(y, dim=0), dim=1)
                         y -= af.tile(d_meanBP, self.nRowsD, d1=self.nColsD)
@@ -1138,7 +1145,7 @@ def backwardProjection(self, y, subset = -1):
                     y = af.flat(af.join(1, af.data.constant(0, y.shape[0], 1, y.shape[2]), y))
                     yPtr = y.raw_ptr()
                     yD = cl.MemoryObject.from_int_ptr(yPtr)
-                    cl.enqueue_copy(self.queue, d_im, yD, offset=(0), origin=(0,0,0), region=(self.nRowsD + 1, self.nColsD + 1, self.nProjSubset[subset].item()));
+                    cl.enqueue_copy(self.queue, d_im, yD, offset=(0), origin=(0,0,0), region=(self.nRowsD + 1, self.nColsD + 1, self.nProjSubset[timestep, subset].item()));
             
             for k in range(self.nMultiVolumes + 1):
                 if self.useAF:
@@ -1160,26 +1167,23 @@ def backwardProjection(self, y, subset = -1):
                         self.knlB.set_arg(kIndLoc, self.d_atten[subset].data)
                         kIndLoc += 1
                     if self.useMaskFP:
-                        if self.maskFPZ > 1:
-                            self.knlB.set_arg(kIndLoc, self.d_maskFP[subset])
-                        else:
-                            self.knlB.set_arg(kIndLoc, self.d_maskFP)
+                        self.knlB.set_arg(kIndLoc, _mask_fp_resource(self, subset))
                         kIndLoc += 1
                     if self.useMaskBP:
                         self.knlB.set_arg(kIndLoc, self.d_maskBP)
                         kIndLoc += 1
                     if (self.CT or self.PET or self.SPECT) and self.listmode == 0:
-                        self.knlB.set_arg(kIndLoc, (cl.cltypes.long)(self.nProjSubset[subset].item()))
+                        self.knlB.set_arg(kIndLoc, (cl.cltypes.long)(self.nProjSubset[timestep, subset].item()))
                         kIndLoc += 1
                     if ((self.listmode == 0 or self.useIndexBasedReconstruction) and not (self.CT or self.SPECT)) or (not self.loadTOF and self.listmode > 0):
-                        self.knlB.set_arg(kIndLoc, self.d_x[0].data)
+                        self.knlB.set_arg(kIndLoc, self.d_x[timestep][0].data)
                     else:
-                        self.knlB.set_arg(kIndLoc, self.d_x[subset].data)
+                        self.knlB.set_arg(kIndLoc, self.d_x[timestep][subset].data)
                     kIndLoc += 1
                     if (self.CT or self.PET or self.SPECT or (self.listmode > 0 and not self.useIndexBasedReconstruction)):
-                        self.knlB.set_arg(kIndLoc, self.d_z[subset].data)
+                        self.knlB.set_arg(kIndLoc, self.d_z[timestep][subset].data)
                     else:
-                        self.knlB.set_arg(kIndLoc, self.d_z[0].data)
+                        self.knlB.set_arg(kIndLoc, self.d_z[timestep][0].data)
                     kIndLoc += 1
                     if (self.normalization_correction):
                         self.knlB.set_arg(kIndLoc, self.d_norm[subset].data)
@@ -1225,9 +1229,12 @@ def backwardProjection(self, y, subset = -1):
                         else:
                             self.knlB.set_arg(kIndLoc, f.data)
                     kIndLoc += 1
+                    if self.SPECT:
+                        self.knlB.set_arg(kIndLoc, self.d_detectorVector[timestep][subset].data)
+                        kIndLoc += 1
                     self.knlB.set_arg(kIndLoc, (cl.cltypes.uchar)(self.no_norm))
                     kIndLoc += 1
-                    self.knlB.set_arg(kIndLoc, (cl.cltypes.ulong)(self.nMeasSubset[subset].item()))
+                    self.knlB.set_arg(kIndLoc, (cl.cltypes.ulong)(self.nMeasSubset[timestep, subset].item()))
                     kIndLoc += 1
                     self.knlB.set_arg(kIndLoc, (cl.cltypes.uint)(subset))
                     kIndLoc += 1
@@ -1264,25 +1271,25 @@ def backwardProjection(self, y, subset = -1):
                                     self.knlB.set_arg(kIndLoc, f.data)
                             kIndLoc += 1
                             if not self.loadTOF and self.listmode > 0:
-                                self.knlB.set_arg(kIndLoc, self.d_x[0].data)
+                                self.knlB.set_arg(kIndLoc, self.d_x[timestep][0].data)
                             else:
-                                self.knlB.set_arg(kIndLoc, self.d_x[subset].data)
+                                self.knlB.set_arg(kIndLoc, self.d_x[timestep][subset].data)
                             kIndLoc += 1
-                            self.knlB.set_arg(kIndLoc, self.d_z[subset].data)
+                            self.knlB.set_arg(kIndLoc, self.d_z[timestep][subset].data)
                             kIndLoc += 1
                             self.knlB.set_arg(kIndLoc, self.d_Sens.data)
                             kIndLoc += 1
                         else:
                             if not self.loadTOF and self.listmode > 0:
-                                self.knlB.set_arg(kIndLoc, self.d_x[0].data)
+                                self.knlB.set_arg(kIndLoc, self.d_x[timestep][0].data)
                             else:
-                                self.knlB.set_arg(kIndLoc, self.d_x[subset].data)
+                                self.knlB.set_arg(kIndLoc, self.d_x[timestep][subset].data)
                             kIndLoc += 1
-                            self.knlB.set_arg(kIndLoc, self.d_z[subset].data)
+                            self.knlB.set_arg(kIndLoc, self.d_z[timestep][subset].data)
                             kIndLoc += 1
                             # Precomputed geometry; only present when the kernel was built with -DGEOM5
                             if self.listmode == 0:
-                                self.knlB.set_arg(kIndLoc, self.d_geom5[subset].data)
+                                self.knlB.set_arg(kIndLoc, self.d_geom5[timestep][subset].data)
                                 kIndLoc += 1
                             self.knlB.set_arg(kIndLoc, d_im)
                             kIndLoc += 1
@@ -1321,25 +1328,22 @@ def backwardProjection(self, y, subset = -1):
                                 self.knlB.set_arg(kIndLoc, f.data)
                         kIndLoc += 1
                         if ((self.listmode == 0 or self.useIndexBasedReconstruction) and not self.CT) or (not self.loadTOF and self.listmode > 0):
-                            self.knlB.set_arg(kIndLoc, self.d_x[0].data)
+                            self.knlB.set_arg(kIndLoc, self.d_x[timestep][0].data)
                         else:
-                            self.knlB.set_arg(kIndLoc, self.d_x[subset].data)
+                            self.knlB.set_arg(kIndLoc, self.d_x[timestep][subset].data)
                         kIndLoc += 1
                         if (self.CT or self.PET or (self.listmode > 0 and not self.useIndexBasedReconstruction)):
-                            self.knlB.set_arg(kIndLoc, self.d_z[subset].data)
+                            self.knlB.set_arg(kIndLoc, self.d_z[timestep][subset].data)
                         else:
-                            self.knlB.set_arg(kIndLoc, self.d_z[0].data)
+                            self.knlB.set_arg(kIndLoc, self.d_z[timestep][0].data)
                         kIndLoc += 1
                         if self.useMaskFP:
-                            if self.maskFPZ > 1:
-                                self.knlB.set_arg(kIndLoc, self.d_maskFP[subset])
-                            else:
-                                self.knlB.set_arg(kIndLoc, self.d_maskFP)
+                            self.knlB.set_arg(kIndLoc, _mask_fp_resource(self, subset))
                             kIndLoc += 1
                         if self.useMaskBP:
                             self.knlB.set_arg(kIndLoc, self.d_maskBP)
                             kIndLoc += 1
-                        self.knlB.set_arg(kIndLoc, (cl.cltypes.ulong)(self.nProjSubset[subset].item()))
+                        self.knlB.set_arg(kIndLoc, (cl.cltypes.ulong)(self.nProjSubset[timestep, subset].item()))
                         kIndLoc += 1
                         if ((self.subsetType == 3 or self.subsetType == 6 or self.subsetType == 7) and self.subsets > 1 and self.listmode == 0):
                             self.knlB.set_arg(kIndLoc, self.d_xyindex[subset].data)
@@ -1360,16 +1364,16 @@ def backwardProjection(self, y, subset = -1):
                         if self.useMaskBP:
                             self.knlB.set_arg(kIndLoc, self.d_maskBP)
                             kIndLoc += 1
-                        self.knlB.set_arg(kIndLoc, (cl.cltypes.ulong)(self.nProjSubset[subset].item()))
+                        self.knlB.set_arg(kIndLoc, (cl.cltypes.ulong)(self.nProjSubset[timestep, subset].item()))
                         kIndLoc += 1
                     else:
-                        self.knlB.set_arg(kIndLoc, (cl.cltypes.ulong)(self.nMeasSubset[subset].item()))
+                        self.knlB.set_arg(kIndLoc, (cl.cltypes.ulong)(self.nMeasSubset[timestep, subset].item()))
                         kIndLoc += 1
                         self.knlB.set_arg(kIndLoc, (cl.cltypes.uint)(subset))
                         kIndLoc += 1
                     self.knlB.set_arg(kIndLoc, (cl.cltypes.int)(k))
                             
-                cl.enqueue_nd_range_kernel(self.queue, self.knlB, self.globalSizeBP[subset][k], self.localSizeBP)
+                cl.enqueue_nd_range_kernel(self.queue, self.knlB, self.globalSizeBP[timestep][subset][k], self.localSizeBP)
                 self.queue.finish()
                 if self.useAF:
                     if self.nMultiVolumes > 0:
