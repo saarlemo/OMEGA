@@ -1578,7 +1578,7 @@ DEVICE void getDetectorCoordinatesSPECT(
     id = i.z * NA; // Index of d_uv (detector panel normal vector)
     const uint detectorElement = i.x + i.y * d_size_x;
     const uint detectorHead = d_detectorVector[i.z];
-    uint idShift = 2*lor + (2*N_RAYS) * detectorElement + detectorHead * d_size_x * d_sizey; // Index of rayShiftsDetector
+    uint idShift = 2*lor + (2*N_RAYS) * (detectorElement + detectorHead * d_size_x * d_sizey); // Index of rayShiftsDetector
 
 	const FLOAT apuX = d_uv[id]; // X component of detector panel normal vector
 	const FLOAT apuY = d_uv[id + 1]; // Y component of detector panel normal vector
