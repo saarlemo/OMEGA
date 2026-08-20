@@ -1593,7 +1593,7 @@ DEVICE void getDetectorCoordinatesSPECT(
 #ifdef TOTLENGTH // Use full ray length for computing emission probability. Thus ray endpoints require shifting to FOV boundary. The begin point (here *s) is shifted only if outside the FOV. 
     extendRayToFOV(s, d, totalFOVmin, totalFOVmax);
 #else // Use only ray length inside FOV for calculating the probability. In this case the ray end point can be at any sufficiently large distance (as long as it is outside of FOV).
-    *d += 100.f * (*d - *s);
+    *d += 10000.f * (*d - *s);
 #endif
 }
 #else

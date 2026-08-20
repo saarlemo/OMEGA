@@ -1080,6 +1080,12 @@ end
 if ~isfield(options, 'colL') % SPECT collimator hole length
     options.colL = 1;
 end
+if ~isfield(options, 'colLxy') % SPECT transaxial collimator hole length
+    options.colLxy = options.colL;
+end
+if ~isfield(options, 'colLz') % SPECT axial collimator hole length
+    options.colLz = options.colL;
+end
 if ~isfield(options, 'colD') % SPECT collimator distance from detector surface
     options.colD = 1;
 end
@@ -1100,6 +1106,9 @@ if ~isfield(options, 'rayShiftsSource')
 end
 if ~isfield(options, 'nHeads') || isempty(options.nHeads)
     options.nHeads = 1;
+end
+if options.SPECT && (~isfield(options, 'DetectorVector') || isempty(options.DetectorVector))
+    options.DetectorVector = zeros(options.nProjections, 1, 'uint32');
 end
 if ~isfield(options, 'iR')
     options.iR = 1;
