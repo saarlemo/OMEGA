@@ -14,7 +14,7 @@ from typing import Any, Iterable
 import numpy as np
 
 
-SCALAR_KERNEL_PARAMS_SIZE = 336
+SCALAR_KERNEL_PARAMS_SIZE = 352
 
 _OFFSETS = {
     "nRowsD": 0,
@@ -35,31 +35,32 @@ _OFFSETS = {
     "Vmax": 64,
     "rings": 68,
     "helicalRadius": 72,
-    "totalFOVmin": 80,
-    "totalFOVmax": 96,
-    "d_N": 112,
-    "b": 128,
-    "dSize5": 144,
-    "kerroin4": 152,
-    "DSC": 156,
-    "d": 160,
-    "d_Scale4": 176,
-    "d_Scale5": 192,
-    "d_bmax": 208,
-    "orthWidth": 224,
-    "nProjections": 232,
-    "no_norm": 240,
-    "m_size": 248,
-    "currentSubset": 256,
-    "aa": 260,
-    "N_PDHG": 272,
-    "epps_PDHG": 288,
-    "theta_PDHG": 292,
-    "tau_PDHG": 296,
-    "enforcePositivity_PDHG": 300,
-    "N_rotate": 304,
-    "cosa_rotate": 320,
-    "sina_rotate": 324,
+    "ellipseCenter": 80,
+    "ellipseRadii": 96,
+    "ellipsePower": 112,
+    "d_N": 128,
+    "b": 144,
+    "dSize5": 160,
+    "kerroin4": 168,
+    "DSC": 172,
+    "d": 176,
+    "d_Scale4": 192,
+    "d_Scale5": 208,
+    "d_bmax": 224,
+    "orthWidth": 240,
+    "nProjections": 248,
+    "no_norm": 256,
+    "m_size": 264,
+    "currentSubset": 272,
+    "aa": 276,
+    "N_PDHG": 288,
+    "epps_PDHG": 304,
+    "theta_PDHG": 308,
+    "tau_PDHG": 312,
+    "enforcePositivity_PDHG": 316,
+    "N_rotate": 320,
+    "cosa_rotate": 336,
+    "sina_rotate": 340,
 }
 
 
@@ -135,16 +136,17 @@ def _pack_scalar_kernel_params(self: Any, timestep: int, subset: int, volume: in
     f32('Vmax', float(self.Vmax))
     u32('rings', int(self.rings))
     f32('helicalRadius', float(self.helicalRadius))
-    f3('totalFOVmin', (
-        float(self.totalFOVxmin),
-        float(self.totalFOVymin),
-        float(self.totalFOVzmin),
+    f3('ellipseCenter', (
+        float(self.ellipseCenterX),
+        float(self.ellipseCenterY),
+        float(self.ellipseCenterZ),
     ))
-    f3('totalFOVmax', (
-        float(self.totalFOVxmax),
-        float(self.totalFOVymax),
-        float(self.totalFOVzmax),
+    f3('ellipseRadii', (
+        float(self.ellipseRadiusX),
+        float(self.ellipseRadiusY),
+        float(self.ellipseRadiusZ),
     ))
+    f32('ellipsePower', float(self.ellipsePower))
 
     u3('d_N', (nx, ny, nz))
     f3('b', (bx, by, bz))

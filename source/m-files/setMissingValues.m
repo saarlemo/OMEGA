@@ -268,23 +268,29 @@ end
 if ~isfield(options, 'oOffsetZ')
     options.oOffsetZ = 0;
 end
-if ~isfield(options, 'totalFOVxmin')
-    options.totalFOVxmin = -options.FOVa_x / 2 + options.oOffsetX;
+if ~isfield(options, 'ellipseCenterX')
+    options.ellipseCenterX = 0;
 end
-if ~isfield(options, 'totalFOVymin')
-    options.totalFOVymin = -options.FOVa_y / 2 + options.oOffsetY;
+if ~isfield(options, 'ellipseCenterY')
+    options.ellipseCenterY = 0;
 end
-if ~isfield(options, 'totalFOVzmin')
-    options.totalFOVzmin = -options.axial_fov / 2 + options.oOffsetZ;
+if ~isfield(options, 'ellipseCenterZ')
+    options.ellipseCenterZ = 0;
 end
-if ~isfield(options, 'totalFOVxmax')
-    options.totalFOVxmax = options.FOVa_x / 2 + options.oOffsetX;
+if ~isfield(options, 'ellipseRadiusX') || ~isfield(options, 'ellipseRadiusY') || ~isfield(options, 'ellipseRadiusZ')
+    options.ellipseRadiusX = options.FOVa_x / 2;
+    options.ellipseRadiusY = options.FOVa_y / 2;
+    options.ellipseRadiusZ = options.axial_fov / 2;
+    options.ellipseParametersDerived = true;
 end
-if ~isfield(options, 'totalFOVymax')
-    options.totalFOVymax = options.FOVa_y / 2 + options.oOffsetY;
+if ~isfield(options, 'ellipsePower')
+    options.ellipsePower = Inf;
 end
-if ~isfield(options, 'totalFOVzmax')
-    options.totalFOVzmax = options.axial_fov / 2 + options.oOffsetZ;
+if ~isfield(options, 'ellipseCenterOffsetApplied') || ~options.ellipseCenterOffsetApplied
+    options.ellipseCenterX = options.ellipseCenterX + options.oOffsetX;
+    options.ellipseCenterY = options.ellipseCenterY + options.oOffsetY;
+    options.ellipseCenterZ = options.ellipseCenterZ + options.oOffsetZ;
+    options.ellipseCenterOffsetApplied = true;
 end
 if ~isfield(options, 'tube_width_z')
     options.tube_width_z = 0;

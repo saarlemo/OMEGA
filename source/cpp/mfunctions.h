@@ -194,12 +194,13 @@ inline void loadInput(scalarStruct& inputScalars, const mxArray* options, const 
             inputScalars.coneOfResponseStdCoeffA = getScalarFloat(getField(options, 0, "coneOfResponseStdCoeffA"));
             inputScalars.coneOfResponseStdCoeffB = getScalarFloat(getField(options, 0, "coneOfResponseStdCoeffB"));
             inputScalars.coneOfResponseStdCoeffC = getScalarFloat(getField(options, 0, "coneOfResponseStdCoeffC"));
-            inputScalars.totalFOVxmin = getScalarFloat(getField(options, 0, "totalFOVxmin"));
-            inputScalars.totalFOVymin = getScalarFloat(getField(options, 0, "totalFOVymin"));
-            inputScalars.totalFOVzmin = getScalarFloat(getField(options, 0, "totalFOVzmin"));
-            inputScalars.totalFOVxmax = getScalarFloat(getField(options, 0, "totalFOVxmax"));
-            inputScalars.totalFOVymax = getScalarFloat(getField(options, 0, "totalFOVymax"));
-            inputScalars.totalFOVzmax = getScalarFloat(getField(options, 0, "totalFOVzmax"));
+            inputScalars.ellipseCenterX = getScalarFloat(getField(options, 0, "ellipseCenterX"));
+            inputScalars.ellipseCenterY = getScalarFloat(getField(options, 0, "ellipseCenterY"));
+            inputScalars.ellipseCenterZ = getScalarFloat(getField(options, 0, "ellipseCenterZ"));
+            inputScalars.ellipseRadiusX = getScalarFloat(getField(options, 0, "ellipseRadiusX"));
+            inputScalars.ellipseRadiusY = getScalarFloat(getField(options, 0, "ellipseRadiusY"));
+            inputScalars.ellipseRadiusZ = getScalarFloat(getField(options, 0, "ellipseRadiusZ"));
+            inputScalars.ellipsePower = getScalarFloat(getField(options, 0, "ellipsePower"));
         }
         /*if (inputScalars.FPType == 6 || inputScalars.BPType == 6) {
             inputScalars.FOVa_y = getScalarFloat(getField(options, 0, "FOVa_y"));

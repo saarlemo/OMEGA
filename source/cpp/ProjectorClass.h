@@ -473,8 +473,7 @@ class ProjectorClass {
 	UINT32_t kernelIndFPSubIter = 0;
 	UINT32_t kernelIndBPSubIter = 0;
 	UINT32_t kernelIndSens = 0;
-	// Total FOV boundary including multi-resolution
-	FLOAT3_t totalFOVmin, totalFOVmax;
+	FLOAT3_t ellipseCenter, ellipseRadii;
 	// Crystal pitch
 	FLOAT2_t dPitch;
 	// Image dimensions
@@ -3008,8 +3007,8 @@ public:
 		d_NPrior = make_vec3<INT3_t>(static_cast<INT32_t>(inputScalars.NxPrior), static_cast<INT32_t>(inputScalars.NyPrior), static_cast<INT32_t>(inputScalars.NzPrior));
 		dPitch = { w_vec.dPitchX, w_vec.dPitchY };
 		if (inputScalars.SPECT) {
-			totalFOVmin = make_vec3<FLOAT3_t>(inputScalars.totalFOVxmin, inputScalars.totalFOVymin, inputScalars.totalFOVzmin);
-			totalFOVmax = make_vec3<FLOAT3_t>(inputScalars.totalFOVxmax, inputScalars.totalFOVymax, inputScalars.totalFOVzmax);
+			ellipseCenter = make_vec3<FLOAT3_t>(inputScalars.ellipseCenterX, inputScalars.ellipseCenterY, inputScalars.ellipseCenterZ);
+			ellipseRadii = make_vec3<FLOAT3_t>(inputScalars.ellipseRadiusX, inputScalars.ellipseRadiusY, inputScalars.ellipseRadiusZ);
 		}
 		b.resize(inputScalars.nMultiVolumes + 1);
 		d.resize(inputScalars.nMultiVolumes + 1);
@@ -3859,8 +3858,9 @@ public:
 		kParams.nRowsD = inputScalars.nRowsD;
 		kParams.nColsD = inputScalars.nColsD;
 		kParams.dPitch = dPitch;
-		kParams.totalFOVmin = make_vec3<FLOAT3_t>(inputScalars.totalFOVxmin, inputScalars.totalFOVymin, inputScalars.totalFOVzmin);
-		kParams.totalFOVmax = make_vec3<FLOAT3_t>(inputScalars.totalFOVxmax, inputScalars.totalFOVymax, inputScalars.totalFOVzmax);
+		kParams.ellipseCenter = make_vec3<FLOAT3_t>(inputScalars.ellipseCenterX, inputScalars.ellipseCenterY, inputScalars.ellipseCenterZ);
+		kParams.ellipseRadii = make_vec3<FLOAT3_t>(inputScalars.ellipseRadiusX, inputScalars.ellipseRadiusY, inputScalars.ellipseRadiusZ);
+		kParams.ellipsePower = inputScalars.ellipsePower;
 		kParams.dL = inputScalars.dL;
 		kParams.global_factor = inputScalars.global_factor;
 		kParams.epps = inputScalars.epps;
@@ -3924,8 +3924,9 @@ public:
 				KARG(FPArgs, kernelFP, kernelIndFP, inputScalars.coneOfResponseStdCoeffA);
 				KARG(FPArgs, kernelFP, kernelIndFP, inputScalars.coneOfResponseStdCoeffB);
 				KARG(FPArgs, kernelFP, kernelIndFP, inputScalars.coneOfResponseStdCoeffC);
-				KARG(FPArgs, kernelFP, kernelIndFP, totalFOVmin);
-				KARG(FPArgs, kernelFP, kernelIndFP, totalFOVmax);
+				KARG(FPArgs, kernelFP, kernelIndFP, ellipseCenter);
+				KARG(FPArgs, kernelFP, kernelIndFP, ellipseRadii);
+				KARG(FPArgs, kernelFP, kernelIndFP, inputScalars.ellipsePower);
 			}
 			KARG(FPArgs, kernelFP, kernelIndFP, dPitch);
 			if (inputScalars.FPType == 2 || inputScalars.FPType == 3) {
@@ -3952,8 +3953,9 @@ public:
 				KARG(BPArgs, kernelBP, kernelIndBP, inputScalars.coneOfResponseStdCoeffA);
 				KARG(BPArgs, kernelBP, kernelIndBP, inputScalars.coneOfResponseStdCoeffB);
 				KARG(BPArgs, kernelBP, kernelIndBP, inputScalars.coneOfResponseStdCoeffC);
-				KARG(BPArgs, kernelBP, kernelIndBP, totalFOVmin);
-				KARG(BPArgs, kernelBP, kernelIndBP, totalFOVmax);
+				KARG(BPArgs, kernelBP, kernelIndBP, ellipseCenter);
+				KARG(BPArgs, kernelBP, kernelIndBP, ellipseRadii);
+				KARG(BPArgs, kernelBP, kernelIndBP, inputScalars.ellipsePower);
 			}
 			KARG(BPArgs, kernelBP, kernelIndBP, dPitch);
 			if (inputScalars.BPType == 2 || inputScalars.BPType == 3) {

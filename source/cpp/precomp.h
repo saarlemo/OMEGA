@@ -28,6 +28,7 @@ struct float2a {
 #include <cstdio>
 #include <cstdint>
 #include <fstream>
+#include <limits>
 #ifdef MATLAB
 #include "mexFunktio.h"
 #endif
@@ -105,7 +106,8 @@ typedef struct structForScalars {
 	std::vector<uint32_t> usedDevices;
 	largeDimStruct lDimStruct;
 	float coneOfResponseStdCoeffA = 0.01f, coneOfResponseStdCoeffB = 0.01f, coneOfResponseStdCoeffC = 0.01f;
-    float totalFOVxmin = 1.f, totalFOVymin = 1.f, totalFOVzmin = 1.f, totalFOVxmax = 1.f, totalFOVymax = 1.f, totalFOVzmax = 1.f;
+	float ellipseCenterX = 0.f, ellipseCenterY = 0.f, ellipseCenterZ = 0.f, ellipseRadiusX = 1.f, ellipseRadiusY = 1.f, ellipseRadiusZ = 1.f,
+		ellipsePower = std::numeric_limits<float>::infinity();
 } scalarStruct;
 
 #ifdef OPENCL

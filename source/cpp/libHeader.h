@@ -526,12 +526,13 @@ struct inputStruct {
     float coneOfResponseStdCoeffA;
     float coneOfResponseStdCoeffB;
     float coneOfResponseStdCoeffC;
-    float totalFOVxmin;
-    float totalFOVymin;
-    float totalFOVzmin;
-    float totalFOVxmax;
-    float totalFOVymax;
-    float totalFOVzmax;
+    float ellipseCenterX;
+    float ellipseCenterY;
+    float ellipseCenterZ;
+    float ellipseRadiusX;
+    float ellipseRadiusY;
+    float ellipseRadiusZ;
+    float ellipsePower;
     // SPECT end
     // More reference images
     float* NLM_ref;
@@ -900,12 +901,13 @@ void copyStruct(inputStruct& options, structForScalars& inputScalars, Weighting&
         inputScalars.coneOfResponseStdCoeffA = options.coneOfResponseStdCoeffA;
         inputScalars.coneOfResponseStdCoeffB = options.coneOfResponseStdCoeffB;
         inputScalars.coneOfResponseStdCoeffC = options.coneOfResponseStdCoeffC;
-        inputScalars.totalFOVxmin = options.totalFOVxmin;
-        inputScalars.totalFOVymin = options.totalFOVymin;
-        inputScalars.totalFOVzmin = options.totalFOVzmin;
-        inputScalars.totalFOVxmax = options.totalFOVxmax;
-        inputScalars.totalFOVymax = options.totalFOVymax;
-        inputScalars.totalFOVzmax = options.totalFOVzmax;
+        inputScalars.ellipseCenterX = options.ellipseCenterX;
+        inputScalars.ellipseCenterY = options.ellipseCenterY;
+        inputScalars.ellipseCenterZ = options.ellipseCenterZ;
+        inputScalars.ellipseRadiusX = options.ellipseRadiusX;
+        inputScalars.ellipseRadiusY = options.ellipseRadiusY;
+        inputScalars.ellipseRadiusZ = options.ellipseRadiusZ;
+        inputScalars.ellipsePower = options.ellipsePower;
     } else {
         inputScalars.nColsD = options.Nang;
         inputScalars.nRowsD = options.Ndist;

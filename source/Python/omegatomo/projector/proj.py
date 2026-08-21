@@ -495,12 +495,15 @@ class projectorClass:
     coneOfResponseStdCoeffA = -1
     coneOfResponseStdCoeffB = -1
     coneOfResponseStdCoeffC = -1
-    totalFOVxmin = 0.
-    totalFOVymin = 0.
-    totalFOVzmin = 0.
-    totalFOVxmax = 0.
-    totalFOVymax = 0.
-    totalFOVzmax = 0.
+    ellipseCenterX = 0.
+    ellipseCenterY = 0.
+    ellipseCenterZ = 0.
+    ellipseRadiusX = 0.
+    ellipseRadiusY = 0.
+    ellipseRadiusZ = 0.
+    ellipsePower = np.inf
+    ellipseCenterOffsetApplied = False
+    ellipseParametersDerived = False
     FISTAType = 0
     normZ = 1
     maskFPZ = 1
@@ -605,18 +608,16 @@ class projectorClass:
                 self.nProjections = int(np.max(self.nProjectionsPerFrame))
             elif isinstance(self.SinM, np.ndarray) and self.SinM.size > 0:
                 self.nProjectionsPerFrame = np.asarray([self.nProjections], dtype=np.int64)
-            if self.totalFOVxmin == 0:
-                self.totalFOVxmin = -self.FOVa_x / 2
-            if self.totalFOVymin == 0:
-                self.totalFOVymin = -self.FOVa_y / 2
-            if self.totalFOVzmin == 0:
-                self.totalFOVzmin = -self.axial_fov / 2
-            if self.totalFOVxmax == 0:
-                self.totalFOVxmax = self.FOVa_x / 2
-            if self.totalFOVymax == 0:
-                self.totalFOVymax = self.FOVa_y / 2
-            if self.totalFOVzmax == 0:
-                self.totalFOVzmax = self.axial_fov / 2 
+            if self.ellipseRadiusX == 0 or self.ellipseRadiusY == 0 or self.ellipseRadiusZ == 0:
+                self.ellipseRadiusX = self.FOVa_x / 2
+                self.ellipseRadiusY = self.FOVa_y / 2
+                self.ellipseRadiusZ = self.axial_fov / 2
+                self.ellipseParametersDerived = True
+            if not self.ellipseCenterOffsetApplied:
+                self.ellipseCenterX += self.oOffsetX
+                self.ellipseCenterY += self.oOffsetY
+                self.ellipseCenterZ += self.oOffsetZ
+                self.ellipseCenterOffsetApplied = True
             if self.projector_type == 6 and ((isinstance(self.SinM, list) and self.SinM) or (isinstance(self.SinM, np.ndarray) and self.SinM.size > 0)):
                 endSinogramRows = self.FOVa_x / self.dPitchX; # Desired amount of sinogram rows
                 endSinogramCols = self.axial_fov / self.dPitchY; # Desired amount of sinogram columns
@@ -1795,9 +1796,13 @@ class projectorClass:
                     elif self.subsetType == 0:
                         print(f'Dividing data into {self.subsets} segments.')
                 
-                print(f'Using an image (matrix) size of {Nx}x{Ny}x{Nz} with {self.Niter} iterations and {self.subsets} subsets.')
+                print(f'Using an image (matrix) size of {Nx}x{Ny}x{Nz}')
+                if len(enabled_algorithms) > 0:
+                    print(f'Using {self.Niter} iterations and {self.subsets} subsets.')
             elif self.CT:
-                print(f'Using an image (matrix) size of {Nx}x{Ny}x{Nz} with {self.Niter} iterations and {self.subsets} subsets.')
+                print(f'Using an image (matrix) size of {Nx}x{Ny}x{Nz}')
+                if len(enabled_algorithms) > 0:
+                    print(f'Using {self.Niter} iterations and {self.subsets} subsets.')
 
     
     
@@ -2446,12 +2451,13 @@ class projectorClass:
             ('coneOfResponseStdCoeffA',ctypes.c_float),
             ('coneOfResponseStdCoeffB',ctypes.c_float),
             ('coneOfResponseStdCoeffC',ctypes.c_float),
-            ('totalFOVxmin',ctypes.c_float),
-            ('totalFOVymin',ctypes.c_float),
-            ('totalFOVzmin',ctypes.c_float),
-            ('totalFOVxmax',ctypes.c_float),
-            ('totalFOVymax',ctypes.c_float),
-            ('totalFOVzmax',ctypes.c_float),
+            ('ellipseCenterX',ctypes.c_float),
+            ('ellipseCenterY',ctypes.c_float),
+            ('ellipseCenterZ',ctypes.c_float),
+            ('ellipseRadiusX',ctypes.c_float),
+            ('ellipseRadiusY',ctypes.c_float),
+            ('ellipseRadiusZ',ctypes.c_float),
+            ('ellipsePower',ctypes.c_float),
             ('NLM_ref', ctypes.POINTER(ctypes.c_float)),
             ('RDP_ref', ctypes.POINTER(ctypes.c_float)),
         ]

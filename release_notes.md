@@ -13,6 +13,11 @@ New features:
   - SPECT only, no corrections (yet)
   - See PyTorch examples
 - Metal support for reconstructions with ArrayFire backend (both Python and MATLAB)
+
+Changed behaviour:
+- SPECT ray tracer projectors now normalize emission probability based on a pre-determined superellipse
+  - Defaults to the superellipse corresponding to FOV boundary
+  - Traced rays are clipped to the inside of the superellipse
 - Memory optimization for SPECT
   - These arrays can now be input as size nRowsD * nColsD * nHeads (one image for each detector head):
     - FP mask

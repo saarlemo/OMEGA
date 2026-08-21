@@ -740,7 +740,7 @@ def initProjector(self):
                 if self.FPType in [1, 2, 3]:
                     self.kIndF = (cp.float32(self.global_factor), cp.float32(self.epps), cp.uint32(self.nRowsD), cp.uint32(self.det_per_ring), cp.float32(self.sigma_x),)
                     if self.SPECT:
-                        self.kIndF += (self.d_rayShiftsDetector, self.d_rayShiftsSource, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.totalFOVxmin), cp.float32(self.totalFOVymin), cp.float32(self.totalFOVzmin), cp.float32(self.totalFOVxmax), cp.float32(self.totalFOVymax), cp.float32(self.totalFOVzmax),)
+                        self.kIndF += (self.d_rayShiftsDetector, self.d_rayShiftsSource, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.ellipseCenterX), cp.float32(self.ellipseCenterY), cp.float32(self.ellipseCenterZ), cp.float32(self.ellipseRadiusX), cp.float32(self.ellipseRadiusY), cp.float32(self.ellipseRadiusZ), cp.float32(self.ellipsePower),)
                     self.kIndF += (cp.float32(self.dPitchX),cp.float32(self.dPitchY),)
                 elif self.FPType == 4:
                     self.kIndF = (cp.uint32(self.nRowsD), cp.uint32(self.nColsD), cp.float32(self.dPitchX),cp.float32(self.dPitchY),cp.float32(self.dL),cp.float32(self.global_factor),)
@@ -773,7 +773,7 @@ def initProjector(self):
                 if self.BPType in [1, 2, 3]:
                     self.kIndB = (cp.float32(self.global_factor), cp.float32(self.epps), cp.uint32(self.nRowsD), cp.uint32(self.det_per_ring), cp.float32(self.sigma_x),)
                     if self.SPECT:
-                        self.kIndB += (self.d_rayShiftsDetector, self.d_rayShiftsSource, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.totalFOVxmin), cp.float32(self.totalFOVymin), cp.float32(self.totalFOVzmin), cp.float32(self.totalFOVxmax), cp.float32(self.totalFOVymax), cp.float32(self.totalFOVzmax),)
+                        self.kIndB += (self.d_rayShiftsDetector, self.d_rayShiftsSource, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.ellipseCenterX), cp.float32(self.ellipseCenterY), cp.float32(self.ellipseCenterZ), cp.float32(self.ellipseRadiusX), cp.float32(self.ellipseRadiusY), cp.float32(self.ellipseRadiusZ), cp.float32(self.ellipsePower),)
                     self.kIndB += (cp.float32(self.dPitchX),cp.float32(self.dPitchY),)
                     if self.BPType in [2, 3]:
                         if self.BPType == 2:
@@ -997,17 +997,19 @@ def initProjector(self):
                     self.kIndF += 1
                     self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.coneOfResponseStdCoeffC))
                     self.kIndF += 1
-                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.totalFOVxmin))
+                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.ellipseCenterX))
                     self.kIndF += 1
-                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.totalFOVymin))
+                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.ellipseCenterY))
                     self.kIndF += 1
-                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.totalFOVzmin))
+                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.ellipseCenterZ))
                     self.kIndF += 1
-                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.totalFOVxmax))
+                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.ellipseRadiusX))
                     self.kIndF += 1
-                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.totalFOVymax))
+                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.ellipseRadiusY))
                     self.kIndF += 1
-                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.totalFOVzmax))
+                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.ellipseRadiusZ))
+                    self.kIndF += 1
+                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.ellipsePower))
                     self.kIndF += 1
                 self.knlF.set_arg(self.kIndF, self.d_dPitch)
                 self.kIndF += 1
@@ -1085,17 +1087,19 @@ def initProjector(self):
                     self.kIndB += 1
                     self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.coneOfResponseStdCoeffC))
                     self.kIndB += 1
-                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.totalFOVxmin))
+                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.ellipseCenterX))
                     self.kIndB += 1
-                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.totalFOVymin))
+                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.ellipseCenterY))
                     self.kIndB += 1
-                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.totalFOVzmin))
+                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.ellipseCenterZ))
                     self.kIndB += 1
-                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.totalFOVxmax))
+                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.ellipseRadiusX))
                     self.kIndB += 1
-                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.totalFOVymax))
+                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.ellipseRadiusY))
                     self.kIndB += 1
-                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.totalFOVzmax))
+                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.ellipseRadiusZ))
+                    self.kIndB += 1
+                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.ellipsePower))
                     self.kIndB += 1
                 self.knlB.set_arg(self.kIndB, self.d_dPitch)
                 self.kIndB += 1
