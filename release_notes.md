@@ -10,7 +10,7 @@ New features:
 - CUDA support for MATLAB projection operators
   - `options.use_CUDA` controls the backend as with implementation 2
 - Initial Metal support for PyTorch projection operators
-  - SPECT only, no corrections (yet)
+  - SPECT only
   - See PyTorch examples
 - Metal support for reconstructions with ArrayFire backend (both Python and MATLAB)
 
@@ -29,6 +29,10 @@ Changed behaviour:
 - SPECT multi-ray projector now uses ```options.n_rays_transaxial``` and ```options.n_rays_axial``` as used in sinogram reconstructions with other modalities
   - The old ```options.nRays``` is still supported, but not recommended to use.
   - ```options.nRays=n^2``` converts silently into values of ```options.n_rays_transaxial=n``` and ```options.n_rays_axial=n```
+- SPECT rotation projector with Python custom operators now has better emission probability normalization when detectors are inside FOV
+
+Other changes:
+- Unified SPECT rotation projector logic for all three Python operator backends
 
 Bug fixes:
 - Fixed texture input for standalone Metal projector calls

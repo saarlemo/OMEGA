@@ -66,6 +66,7 @@ class projectorClass:
     angles: npt.NDArray[np.float32] = np.empty(0, dtype = np.float32)
     blurPlanes: npt.NDArray[np.int32] = np.empty(0, dtype = np.int32)
     blurPlanes2: npt.NDArray[np.int32] = np.empty(0, dtype = np.int32)
+    blurPlanes2Linear: npt.NDArray[np.float32] = np.empty(0, dtype = np.float32)
     radiusPerProj: npt.NDArray[np.float32] = np.empty(0, dtype = np.float32)
     gFilter = np.empty(0, dtype = np.float32)
     filterIm = np.empty(0, dtype = np.float32)
@@ -618,35 +619,10 @@ class projectorClass:
                 self.ellipseCenterY += self.oOffsetY
                 self.ellipseCenterZ += self.oOffsetZ
                 self.ellipseCenterOffsetApplied = True
-            if self.projector_type == 6 and ((isinstance(self.SinM, list) and self.SinM) or (isinstance(self.SinM, np.ndarray) and self.SinM.size > 0)):
-                endSinogramRows = self.FOVa_x / self.dPitchX; # Desired amount of sinogram rows
-                endSinogramCols = self.axial_fov / self.dPitchY; # Desired amount of sinogram columns
-                padRows = int((endSinogramRows-self.nRowsD)/2) # Pad this amount on both sides
-                padCols = int((endSinogramCols-self.nColsD)/2) # Pad this amount on both sides
-                def resize_sinogram(frame):
-                    if padRows < 0:
-                        frame = frame[-padRows:padRows, :, :]
-                    if padRows > 0:
-                        frame = np.pad(frame, ((padRows, padRows), (0, 0), (0, 0)))
-                    if padCols < 0:
-                        frame = frame[:, -padCols:padCols, :]
-                    if padCols > 0:
-                        frame = np.pad(frame, ((0, 0), (padCols, padCols), (0, 0)))
-                    return frame
-                if isinstance(self.SinM, list):
-                    self.SinM = [resize_sinogram(frame) for frame in self.SinM]
-                else:
-                    self.SinM = resize_sinogram(self.SinM)
-                self.nRowsD = self.Nx; # Set new sinogram size
-                self.nColsD = self.Nz; # Set new sinogram size
-                
-                # Now the sinogram and FOV XZ-plane match in physical dimensions but not in resolution.
-                from skimage.transform import resize
-                if isinstance(self.SinM, list):
-                    self.SinM = [resize(frame, (self.Nx, self.Nz, frame.shape[2]), order=0, mode='reflect', anti_aliasing=True, preserve_range=True) for frame in self.SinM]
-                else:
-                    self.SinM = resize(self.SinM, (self.Nx, self.Nz), order=0, mode = 'reflect', anti_aliasing = True, preserve_range=True)
-                
+            # Type-6 keeps its public detector grid on every custom-operator backend.  Its shared FP/BP helpers transform explicitly between that grid and each volume's image-sized projection grid.
+            if self.projector_type in (6, 16, 26, 61, 62, 66):
+                self.measurement_nRowsD = int(self.nRowsD)
+                self.measurement_nColsD = int(self.nColsD)
             if self.swivelAngles.size == 0:
                 self.swivelAngles = self.angles + 180
             if self.offangle != 0:
@@ -909,7 +885,7 @@ class projectorClass:
             self.projector_type = 4
         
         # Coordinates of the detectors
-        if self.projector_type != 6:
+        if self.projector_type not in (6, 66):
             if self.listmode == False:
                 if self.SPECT:
                     from .detcoord import getCoordinatesSPECT
@@ -977,7 +953,7 @@ class projectorClass:
         #         size_x = self.Ndist
         #     if self.sampling > 1:
         #         size_x = size_x * self.sampling
-        if self.CT == True or self.projector_type == 6:
+        if self.CT == True or self.projector_type in (6, 16, 26, 61, 62, 66):
             size_x = self.nRowsD
             # if self.listmode == True:
             #     size_x = self.x.size // 6
@@ -1020,7 +996,7 @@ class projectorClass:
                 if self.subsetType >= 8 or self.subsets == 1:
                     frame_vector = frame_vector[frame_index]
                 self.DetectorVectorFrames.append(np.ascontiguousarray(frame_vector, dtype=np.uint32))
-        if ((self.CT or self.PET or self.SPECT) and self.projector_type != 6) and self.listmode == 0:
+        if ((self.CT or self.PET or self.SPECT) and self.projector_type not in (6, 66)) and self.listmode == 0:
             if ((self.subsetType >= 8 and self.subsets > 1) or (self.SPECT and self.subsets == 1)) and not self.FDK:
                 if self.CT:
                     frame_index = self.index[0] if isinstance(self.index, list) and self.Nt == 1 else self.index
@@ -1067,7 +1043,7 @@ class projectorClass:
                 if self.CT and not self.useHelical:
                     frame_index = self.index[0] if isinstance(self.index, list) and self.Nt == 1 else self.index
                     self.uV = self.uV[frame_index,:]
-        if self.SPECT and self.listmode == 0 and self.projector_type != 6 and (
+        if self.SPECT and self.listmode == 0 and self.projector_type not in (6, 66) and (
             not isinstance(getattr(self, 'xFrames', None), list)
             or len(self.xFrames) != self.Nt
         ):
@@ -1091,7 +1067,7 @@ class projectorClass:
             x_det = np.concatenate([frame.ravel(order='F') for frame in self.xFrames])
             z_det = np.concatenate([frame.ravel(order='F') for frame in self.zFrames])
 
-        if self.listmode == 0 and self.projector_type != 6:
+        if self.listmode == 0 and self.projector_type not in (6, 66):
             if self.SPECT:
                 self.x = x_det.ravel('F')
                 self.z = z_det.ravel('F')
@@ -1110,9 +1086,9 @@ class projectorClass:
         if self.SPECT:
             from .detcoord import SPECTParameters
             SPECTParameters(self)
-        if self.projector_type == 6:
+        if self.projector_type in (6, 16, 26, 61, 62, 66):
             if self.subsets > 1 and (self.subsetType == 8 or self.subsetType == 9 or self.subsetType == 10 or self.subsetType == 11):
-                geometry_fields = ('angles', 'swivelAngles', 'radiusPerProj', 'blurPlanes', 'blurPlanes2')
+                geometry_fields = ('angles', 'swivelAngles', 'radiusPerProj', 'blurPlanes', 'blurPlanes2', 'blurPlanes2Linear')
                 if isinstance(self.index, list):
                     projection_counts = np.asarray(self.nProjectionsPerFrame, dtype=np.int64).reshape(-1)
                     frame_offsets = np.concatenate(([0], np.cumsum(projection_counts, dtype=np.int64)))
@@ -1161,17 +1137,17 @@ class projectorClass:
             self.FOVa_y = np.array(self.FOVa_y, dtype=np.float32, ndmin=1)
         if not isinstance(self.axial_fov, np.ndarray):
             self.axial_fov = np.array(self.axial_fov, dtype=np.float32, ndmin=1)
-        if self.projector_type in [2, 3, 22, 33, 13, 12, 31, 32, 21, 23, 42, 43, 34, 24]:
+        if self.projector_type in [2, 3, 22, 33, 13, 12, 31, 32, 21, 23, 42, 43, 34, 24, 26, 62]:
             if self.projector_type in [3, 33, 13, 31, 32, 23, 43, 34]:
                 self.orthTransaxial = True
-            elif (self.projector_type in [2, 22, 12, 21, 24, 42]) and (self.tube_width_xy > 0 or self.SPECT):
+            elif (self.projector_type in [2, 22, 12, 21, 24, 42, 26, 62]) and (self.tube_width_xy > 0 or self.SPECT):
                 self.orthTransaxial = True
             else:
                 self.orthTransaxial = False
-        if self.projector_type in [2, 3, 22, 33, 13, 12, 31, 32, 21, 23, 42, 43, 34, 24]:
+        if self.projector_type in [2, 3, 22, 33, 13, 12, 31, 32, 21, 23, 42, 43, 34, 24, 26, 62]:
             if self.projector_type in [3, 33, 13, 31, 32, 23, 43, 34]:
                 self.orthAxial = True
-            elif (self.projector_type in [2, 22, 12, 21, 24, 42]) and (self.tube_width_z > 0 or self.SPECT):
+            elif (self.projector_type in [2, 22, 12, 21, 24, 42, 26, 62]) and (self.tube_width_z > 0 or self.SPECT):
                 self.orthAxial = True
             else:
                 self.orthAxial = False
@@ -1216,7 +1192,7 @@ class projectorClass:
             if np.any(self.DetectorVector >= int(self.nHeads)):
                 raise ValueError(f'DetectorVector contains an index outside the available detector heads [0, {int(self.nHeads) - 1}].')
 
-            if self.projector_type in [1, 11, 12, 2, 21, 22, 3, 13, 23, 33, 31, 32]:
+            if self.projector_type in [1, 11, 12, 2, 21, 22, 3, 13, 23, 33, 31, 32, 16, 26, 61, 62]:
                 compact_ray_shift_size = 2 * int(self.n_rays_transaxial) * int(self.n_rays_axial) * int(self.nRowsD) * int(self.nColsD) * int(self.nHeads)
                 detector_size = int(np.size(self.rayShiftsDetector))
                 source_size = int(np.size(self.rayShiftsSource))
@@ -1235,7 +1211,7 @@ class projectorClass:
             print("Axial FOV is too small, crystal ring(s) on the boundary have no slices!")
         if self.SPECT and math.sqrt(self.nRays) % 1 != 0:
             raise ValueError("With SPECT, options.nRays has to be a square")
-        if self.SPECT and self.projector_type in [2, 12, 21, 22] and self.n_rays_transaxial * self.n_rays_axial > 1:
+        if self.SPECT and self.projector_type in [2, 12, 21, 22, 26, 62] and self.n_rays_transaxial * self.n_rays_axial > 1:
             print('Orthogonal distance ray tracer should be used with 1 ray.')
         if not(self.PDHG or self.PDHGKL or self.PDHGL1 or self.PDDY or self.PKMA or self.FISTA or self.FISTAL1 or self.MBSREM or self.SPS or self.MRAMLA) and any(self.precondTypeImage):
             print("Image-based preconditioning selected, but the selected algorithm(s) do not support preconditioning. No preconditioning will be performed.")
@@ -1346,7 +1322,7 @@ class projectorClass:
         if self.TV and self.TVtype == 2 and not self.TV_use_anatomical:
             print('Using TV type = 2, but no anatomical reference set. Using TV type = 1 instead!')
             self.TVtype == 1
-        if self.projector_type not in [1, 2, 3, 4, 5, 6, 11, 14, 12, 13, 21, 22, 23, 24, 31, 32, 33, 34, 41, 42, 43, 44, 45, 51, 15, 54, 55]:
+        if self.projector_type not in [1, 2, 3, 4, 5, 6, 11, 14, 12, 13, 16, 21, 22, 23, 24, 26, 31, 32, 33, 34, 41, 42, 43, 44, 45, 51, 15, 54, 55, 61, 62, 66]:
             raise ValueError('The selected projector type is not supported!')
         if self.APLS and not os.path.exists(self.APLS_ref_image) and self.MAP and not type(self.APLS_ref_image) == np.ndarray:
             raise FileNotFoundError('APLS selected, but the anatomical reference image was not found on path!')
@@ -1378,13 +1354,13 @@ class projectorClass:
         if self.projector_type in [5, 15, 51, 45, 54] and not self.CT:
             raise ValueError('Projector type 5 is only supported with CT data!')
         
-        if self.projector_type == 6 and not self.SPECT:
+        if self.projector_type in (6, 16, 26, 61, 62, 66) and not self.SPECT:
             raise ValueError('Projector type 6 is only supported with SPECT data!')
             
-        if (not(self.projector_type == 6) and not(self.projector_type == 1) and not(self.projector_type == 11) and not(self.projector_type == 2) and not(self.projector_type == 22)) and self.SPECT:
-            raise ValueError('SPECT only supports projector types 1, 2 and 6!')
+        if self.projector_type not in (1, 2, 6, 11, 16, 21, 22, 26, 61, 62, 66) and self.SPECT:
+            raise ValueError('SPECT only supports projector types 1, 2 and 6, plus supported hybrid variants!')
         
-        if self.projector_type == 6:
+        if self.projector_type in (6, 16, 26, 61, 62, 66):
             if self.subsets > 1 and self.subsetType < 8:
                 raise ValueError('Subset types 0-7 are not supported with projector type 6!')
         
@@ -1611,6 +1587,8 @@ class projectorClass:
                         dispi += "Interpolation-based projector selected for forward projection, "
                     elif fpType == 5:
                         dispi += "Branchless distance-driven projector selected for forward projection, "
+                    elif fpType == 6:
+                        dispi += "rotation-based projector selected for forward projection, "
                     if bpType == 1:
                         dispi += "improved Siddon's algorithm for backprojection."
                     elif bpType == 2:
@@ -1621,6 +1599,8 @@ class projectorClass:
                         dispi += "interpolation-based projector for backprojection."
                     elif bpType == 5:
                         dispi += "branchless distance-driven projector for backprojection."
+                    elif bpType == 6:
+                        dispi += "rotation-based projector for backprojection."
                     print(dispi)
         
                 if self.use_psf:

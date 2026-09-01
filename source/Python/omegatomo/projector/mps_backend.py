@@ -187,22 +187,16 @@ def _mps_tensor_from_numpy(torch: Any, value: Any, dtype: Any) -> Any:
 
 
 def _validate_configuration(self: Any) -> None:
-    fp_type = getattr(self, 'FPType', None)
-    bp_type = getattr(self, 'BPType', None)
     errors: list[str] = []
-    if fp_type in (4, 5, 6):
-        errors.append(f'forward projector type {fp_type} is unsupported')
-    elif fp_type not in (1, 2, 3):
-        errors.append(f'forward projector type {fp_type!r} is unsupported')
-    if bp_type in (5, 6):
-        errors.append(f'backprojector type {bp_type} is unsupported')
-    elif bp_type not in (1, 2, 3, 4):
-        errors.append(f'backprojector type {bp_type!r} is unsupported')
-    if getattr(self, 'FDK', False):
-        errors.append('FDK is unsupported by the Metal/MPS custom-operator path')
-    if getattr(self, 'use_64bit_atomics', False) or getattr(self, 'use_32bit_atomics', False):
+    if self.FPType not in (1, 2, 3, 6):
+        errors.append(f'forward projector type {self.FPType!r} is unsupported')
+    if self.BPType not in (1, 2, 3, 4, 6):
+        errors.append(f'backprojector type {self.BPType!r} is unsupported')
+    if (self.FPType == 6 or self.BPType == 6) and not self.SPECT:
+        errors.append('projector type 6 is only supported with SPECT data')
+    if self.use_32bit_atomics or self.use_64bit_atomics:
         errors.append('integer accumulation is unsupported by the Metal/MPS custom-operator path')
-    if getattr(self, 'use_psf', False):
+    if self.use_psf:
         errors.append('PSF convolution is unsupported by the Metal/MPS custom-operator path')
     if errors:
         raise ValueError('Metal/MPS configuration: ' + '; '.join(errors))
@@ -452,7 +446,7 @@ def _upload_static_buffers(self: Any, torch: Any) -> None:
     self.d_maskFP = [[self.mps_empty_uint8] * self.subsets for _ in range(self.Nt)]
     if getattr(self, 'useMaskFP', False) and not _empty_value(mask_fp):
         mask_fp = np.asarray(mask_fp, dtype=np.uint8).ravel(order='F')
-        frame_stride = int(self.nRowsD * self.nColsD)
+        frame_stride = int(getattr(self, 'measurement_nRowsD', self.nRowsD) * getattr(self, 'measurement_nColsD', self.nColsD))
         for timestep in range(self.Nt):
             for subset in range(self.subsets):
                 if getattr(self, 'SPECT', False) and int(getattr(self, 'maskFPZ', 1)) == int(getattr(self, 'nHeads', 1)):
@@ -468,6 +462,9 @@ def _upload_static_buffers(self: Any, torch: Any) -> None:
     self.d_maskBP = self.mps_empty_uint8
     if self.useMaskBP and self.maskBP.size:
         self.d_maskBP = _mps_tensor_from_numpy(torch, self.maskBP.ravel(order='F'), np.uint8)
+
+    if int(getattr(self, 'FPType', 0)) == 6 or int(getattr(self, 'BPType', 0)) == 6:
+        self.d_gFilter = _mps_tensor_from_numpy(torch, self.gFilter, np.float32)
 
 
 def _geometry_buffer(self: Any, name: str, timestep: int, subset: int) -> Any:
@@ -489,50 +486,62 @@ def _geometry_buffer(self: Any, name: str, timestep: int, subset: int) -> Any:
 def init_mps_projector(
     self: Any,
     *,
-    source_root: os.PathLike[str] | str,
-    source_fp: str,
-    source_bp: str,
-    options_fp: Iterable[Any],
-    options_bp: Iterable[Any],
+    source_root: os.PathLike[str] | str | None = None,
+    source_fp: str | None = None,
+    source_bp: str | None = None,
+    options_fp: Iterable[Any] = (),
+    options_bp: Iterable[Any] = (),
 ) -> None:
     import torch
 
     _validate_configuration(self)
     if not torch.backends.mps.is_available():
         raise RuntimeError('PyTorch MPS is not available on this machine.')
-    if not hasattr(torch.mps, 'compile_shader'):
+    if (int(self.FPType) != 6 or int(self.BPType) != 6) and not hasattr(torch.mps, 'compile_shader'):
         raise RuntimeError('This backend requires torch.mps.compile_shader().')
 
     self.useImages = False # PyTorch binds arrays as Metal buffers
 
     self.no_norm = 1
-    self.mSize = int(self.nRowsD * self.nColsD * self.nProjections)
-
-    options_fp = _without_compile_define(tuple(options_fp), 'USEIMAGES')
-    options_bp = _without_compile_define(tuple(options_bp), 'USEIMAGES')
-    complete_fp = _assemble_metal_source(source_fp, options_fp, source_root)
-    complete_bp = _assemble_metal_source(source_bp, options_bp, source_root)
-    self.mps_lib_fp = _compile_shader_cached(torch, complete_fp, 'forward')
-    self.mps_lib_bp = _compile_shader_cached(torch, complete_bp, 'backward')
-    fp_name = 'projectorType123'
-    bp_name = 'projectorType123' if int(self.BPType) in (1, 2, 3) else 'projectorType4Backward'
-    try:
-        self.knlF = getattr(self.mps_lib_fp, fp_name)
-        self.knlB = getattr(self.mps_lib_bp, bp_name)
-    except AttributeError as exc:
-        raise RuntimeError(f"Compiled Metal library does not expose '{fp_name}'/'{bp_name}'.") from exc
+    self.mSize = int(getattr(self, 'measurement_nRowsD', self.nRowsD) * getattr(self, 'measurement_nColsD', self.nColsD) * self.nProjections)
 
     _upload_static_buffers(self, torch)
-    self.mps_scalar_params = []
-    for timestep in range(self.Nt):
-        per_subset = []
-        for subset in range(self.subsets):
-            per_volume = []
-            for volume in range(int(self.nMultiVolumes) + 1):
-                packed = np.frombuffer(_pack_scalar_kernel_params(self, timestep, subset, volume), dtype=np.uint8).copy()
-                per_volume.append(torch.as_tensor(packed, device='mps'))
-            per_subset.append(per_volume)
-        self.mps_scalar_params.append(per_subset)
+    # Type 6 uses the native MPS implementation for that direction.  Hybrid projectors still need a compiled shader for the other direction (for example type 61 is rotation FP + Siddon BP), so compile each side independently instead of returning early when FPType is 6.
+    if (self.FPType != 6 or self.BPType != 6) and source_root is None:
+        raise ValueError('Metal projector source is required for projector types 1-4')
+    options_fp = _without_compile_define(tuple(options_fp), 'USEIMAGES')
+    options_bp = _without_compile_define(tuple(options_bp), 'USEIMAGES')
+    if self.FPType != 6:
+        if source_fp is None:
+            raise ValueError('Metal forward projector source is required for this configuration')
+        complete_fp = _assemble_metal_source(source_fp, options_fp, source_root)
+        self.mps_lib_fp = _compile_shader_cached(torch, complete_fp, 'forward')
+        try:
+            self.knlF = self.mps_lib_fp.projectorType123
+        except AttributeError as exc:
+            raise RuntimeError("Compiled Metal library does not expose 'projectorType123'.") from exc
+    if self.BPType != 6:
+        if source_bp is None:
+            raise ValueError('Metal backward projector source is required for this configuration')
+        complete_bp = _assemble_metal_source(source_bp, options_bp, source_root)
+        self.mps_lib_bp = _compile_shader_cached(torch, complete_bp, 'backward')
+        bp_name = 'projectorType123' if self.BPType in (1, 2, 3) else 'projectorType4Backward'
+        try:
+            self.knlB = getattr(self.mps_lib_bp, bp_name)
+        except AttributeError as exc:
+            raise RuntimeError(f"Compiled Metal library does not expose '{bp_name}'.") from exc
+
+    if self.FPType != 6 or self.BPType != 6:
+        self.d_scalar_params = []
+        for timestep in range(self.Nt):
+            per_subset = []
+            for subset in range(self.subsets):
+                per_volume = []
+                for volume in range(int(self.nMultiVolumes) + 1):
+                    packed = np.frombuffer(_pack_scalar_kernel_params(self, timestep, subset, volume), dtype=np.uint8).copy()
+                    per_volume.append(torch.as_tensor(packed, device='mps'))
+                per_subset.append(per_volume)
+            self.d_scalar_params.append(per_subset)
 
 def _kernel_args(
     self: Any,
@@ -546,46 +555,42 @@ def _kernel_args(
     """Bind every Metal resource slot, using typed empty buffers when inactive."""
     empty_f = self.mps_empty_float32
     atten = self.d_attenuation_image if getattr(self, 'CTAttenuation', False) else self.d_attenuation[timestep][subset]
-    args = [empty_f] * 22
-    args[0] = scalar_params
-    args[1] = self.d_rayShiftsDetector
-    args[2] = self.d_rayShiftsSource
-    args[3] = self.d_TOFCenter
-    args[4] = self.d_V
-    args[5] = atten
-    args[6] = self.d_maskFP[timestep][subset]
-    args[7] = self.d_maskBP
-    args[8] = _geometry_buffer(self, 'x', timestep, subset)
-    args[9] = _geometry_buffer(self, 'z', timestep, subset)
-    args[10] = self.d_norm[timestep][subset]
-    args[11] = self.d_scatter[timestep][subset]
-    args[12] = self.d_Sens
-    args[13] = self.d_xyindex[timestep][subset]
-    args[14] = self.d_zindex[timestep][subset]
-    args[15] = self.d_trIndex[timestep][subset]
-    args[16] = self.d_axIndex[timestep][subset]
-    args[17] = self.d_TOFIndex[timestep][subset]
-    args[18] = self.d_L[timestep][subset]
-    args[19] = dynamic_input
-    args[20] = output
-    args[21] = self.d_detectorVector[timestep][subset]
-    if direction == 'forward' and int(self.FPType) not in (1, 2, 3):
-        raise ValueError(f'Unsupported Metal/MPS forward projector type: {self.FPType}')
-    if direction == 'backward' and int(self.BPType) not in (1, 2, 3):
-        if int(self.BPType) != 4:
-            raise ValueError(f'Unsupported Metal/MPS backprojector type: {self.BPType}')
-        args4 = [empty_f] * 10
-        args4[0] = scalar_params
-        args4[1] = self.d_T[timestep][subset]
-        args4[2] = dynamic_input
-        args4[3] = getattr(self, 'mps_fdk_angle', empty_f)
-        args4[4] = output
-        args4[5] = _geometry_buffer(self, 'x', timestep, subset)
-        args4[6] = _geometry_buffer(self, 'z', timestep, subset)
-        args4[7] = self.d_Sens
-        args4[8] = self.d_norm[timestep][subset]
-        args4[9] = self.d_maskBP
-        return args4
+    if (direction == 'forward' and self.FPType in (1, 2, 3)) or (direction == 'backward' and self.BPType in (1, 2, 3)):
+        args = [empty_f] * 22
+        args[0] = scalar_params
+        args[1] = self.d_rayShiftsDetector
+        args[2] = self.d_rayShiftsSource
+        args[3] = self.d_TOFCenter
+        args[4] = self.d_V
+        args[5] = atten
+        args[6] = self.d_maskFP[timestep][subset]
+        args[7] = self.d_maskBP
+        args[8] = _geometry_buffer(self, 'x', timestep, subset)
+        args[9] = _geometry_buffer(self, 'z', timestep, subset)
+        args[10] = self.d_norm[timestep][subset]
+        args[11] = self.d_scatter[timestep][subset]
+        args[12] = self.d_Sens
+        args[13] = self.d_xyindex[timestep][subset]
+        args[14] = self.d_zindex[timestep][subset]
+        args[15] = self.d_trIndex[timestep][subset]
+        args[16] = self.d_axIndex[timestep][subset]
+        args[17] = self.d_TOFIndex[timestep][subset]
+        args[18] = self.d_L[timestep][subset]
+        args[19] = dynamic_input
+        args[20] = output
+        args[21] = self.d_detectorVector[timestep][subset]
+    elif direction == 'backward' and self.BPType == 4:
+        args = [empty_f] * 10
+        args[0] = scalar_params
+        args[1] = self.d_T[timestep][subset]
+        args[2] = dynamic_input
+        args[3] = getattr(self, 'mps_fdk_angle', empty_f)
+        args[4] = output
+        args[5] = _geometry_buffer(self, 'x', timestep, subset)
+        args[6] = _geometry_buffer(self, 'z', timestep, subset)
+        args[7] = self.d_Sens
+        args[8] = self.d_norm[timestep][subset]
+        args[9] = self.d_maskBP
     return args
 
 
@@ -601,8 +606,8 @@ def _require_mps_float32_contiguous(tensor: Any, name: str) -> Any:
 
 
 def _projection_size(self: Any, timestep: int, subset: int) -> int:
-    if int(getattr(self, 'subsetType', 0)) > 7 or self.subsets == 1:
-        return int(self.nRowsD * self.nColsD * self.nProjSubset[timestep, subset])
+    if self.subsetType > 7 or self.subsets == 1:
+        return int(getattr(self, 'measurement_nRowsD', self.nRowsD) * getattr(self, 'measurement_nColsD', self.nColsD) * self.nProjSubset[timestep, subset])
     return int(self.nMeasSubset[timestep, subset])
 
 
@@ -623,12 +628,18 @@ def forward_projection_mps(self: Any, f: Any, subset: int, timestep: int) -> Any
     output = torch.zeros(_projection_size(self, timestep, subset), dtype=torch.float32, device='mps')
     for volume, image in enumerate(inputs):
         partial = torch.zeros_like(output)
-        args = _kernel_args(self, self.mps_scalar_params[timestep][subset][volume], image, partial, subset, timestep, 'forward')
-        self.knlF(
-            *args,
-            threads=tuple(int(value) for value in self.globalSizeFP[timestep][subset]),
-            group_size=tuple(int(value) for value in self.localSizeFP),
-        )
+        if self.FPType == 6:
+            from .projfunctions import _type6_torch_ops, type6_forward
+            with torch.no_grad(): # Disabling GradMode prevents MPS from retaining per-view state across OSEM subsets.
+                type6_forward(self, image, partial, volume, subset, timestep, ops=_type6_torch_ops(self))
+            torch.mps.synchronize()
+        else:
+            args = _kernel_args(self, self.d_scalar_params[timestep][subset][volume], image, partial, subset, timestep, 'forward')
+            self.knlF(
+                *args,
+                threads=tuple(int(value) for value in self.globalSizeFP[timestep][subset]),
+                group_size=tuple(int(value) for value in self.localSizeFP),
+            )
         output += partial
     return output
 
@@ -645,11 +656,17 @@ def backward_projection_mps(self: Any, y: Any, subset: int, timestep: int) -> An
     outputs: list[Any] = []
     for volume in range(int(self.nMultiVolumes) + 1):
         output = torch.zeros(int(np.asarray(self.N).reshape(-1)[volume]), dtype=torch.float32, device='mps')
-        args = _kernel_args(self, self.mps_scalar_params[timestep][subset][volume], y, output, subset, timestep, 'backward')
-        self.knlB(
-            *args,
-            threads=tuple(int(value) for value in self.globalSizeBP[timestep][subset][volume]),
-            group_size=tuple(int(value) for value in self.localSizeBP),
-        )
+        if self.BPType == 6:
+            from .projfunctions import _type6_torch_ops, type6_backward
+            with torch.no_grad():
+                type6_backward(self, y, output, volume, subset, timestep, ops=_type6_torch_ops(self))
+            torch.mps.synchronize()
+        else:
+            args = _kernel_args(self, self.d_scalar_params[timestep][subset][volume], y, output, subset, timestep, 'backward')
+            self.knlB(
+                *args,
+                threads=tuple(int(value) for value in self.globalSizeBP[timestep][subset][volume]),
+                group_size=tuple(int(value) for value in self.localSizeBP),
+            )
         outputs.append(output)
-    return outputs[0] if int(self.nMultiVolumes) == 0 else outputs
+    return outputs[0] if self.nMultiVolumes == 0 else outputs

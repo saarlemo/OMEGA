@@ -186,7 +186,7 @@ def setCTCoordinates(options):
     if options.useHelical:
         options.x = np.column_stack((options.x[:,0], options.y[:,0], options.z[:,0], options.x[:,1], options.y[:,1], options.z[:,1]))
         options.z = np.float32(options.angles)
-        
+
 def CTDetectorCoordinates(angles, pitchRoll = np.empty(0, dtype=np.float32)):
     """
     Computes the direction vectors for each projection based on the input data.
@@ -896,7 +896,7 @@ def sinogramCoordinates3D(options, layers = (1,1)):
 
 
 def SPECTParameters(options: proj.projectorClass):
-    if options.projector_type in [1, 11, 12, 2, 21, 22]: # Ray tracing projectors
+    if options.projector_type in [1, 11, 12, 16, 2, 21, 22, 26, 61, 62]: # Ray tracing projectors
         nRays = int(options.n_rays_transaxial * options.n_rays_axial)
         if options.rayShiftsDetector.size == 0: # Collimator modeling
             options.rayShiftsDetector = np.zeros((2*nRays, options.nRowsD, options.nColsD, options.nHeads), dtype=np.float32)
@@ -932,7 +932,7 @@ def SPECTParameters(options: proj.projectorClass):
                     options.rayShiftsSource[2 * kk, :, :, :] = tmp_shift[2 * kk]
                     options.rayShiftsSource[2 * kk + 1, :, :, :] = tmp_shift[2 * kk + 1]
 
-        if options.projector_type in [1, 11, 12, 21]:
+        if options.projector_type in [1, 11, 12, 16, 21, 61]:
             # Scale each source-detector shift difference so that the two angular response components use their corresponding septa lengths.
             referenceLength = options.colD + 0.5 * options.colL
             lengthXY = options.colD + 0.5 * options.colLxy
@@ -949,7 +949,7 @@ def SPECTParameters(options: proj.projectorClass):
         options.rayShiftsDetector = options.rayShiftsDetector.ravel('F')
         options.rayShiftsSource = options.rayShiftsSource.ravel('F')
 
-    if options.projector_type in [12, 21, 2, 22]: # Orthogonal distance ray tracer
+    if options.projector_type in [2, 12, 21, 26, 22, 62]: # Orthogonal distance ray tracer
         if options.coneOfResponseStdCoeffA < 0:
             options.coneOfResponseStdCoeffA = 2*options.colR/options.colL
         if options.coneOfResponseStdCoeffB < 0:
@@ -957,26 +957,37 @@ def SPECTParameters(options: proj.projectorClass):
         if options.coneOfResponseStdCoeffC < 0:
             options.coneOfResponseStdCoeffC = options.iR
 
-    if options.projector_type == 6: # Rotation-based projector
+    if options.projector_type in (6, 16, 26, 61, 62, 66): # Rotation-based projector side
         DistanceToFirstRow = 0.5 * options.dx
-        Distances = DistanceToFirstRow[..., np.newaxis] + np.arange(options.Nx * 4, dtype=np.float32) * options.dx
-        Distances -= (options.colL + options.colD)  # distances to detector surface
+        # ``addProjector`` normalizes image dimensions to one-element arrays.
+        # NumPy 2 no longer accepts such an array as the length for arange.
+        nx = int(np.asarray(options.Nx).reshape(-1)[0])
+
+        Distances = DistanceToFirstRow[..., np.newaxis] + np.arange(nx * 4, dtype=np.float32) * options.dx
 
         if options.gFilter.size == 0:
             if options.sigmaZ < 0.:
-                Rg = 2. * options.colR * (options.colL + options.colD + Distances + options.cr_p / 2.) / options.colL #Anger, "Scintillation Camera with Multichannel Collimators", J Nucl Med 5:515-531 (1964)
-                Rg[Rg < 0] = 0.
+                col_l_xy = float(options.colLxy) if options.colLxy > 0. else float(options.colL)
+                col_l_z = float(options.colLz) if options.colLz > 0. else float(options.colL)
+                distance_from_exit = Distances + options.cr_p / 2.
+                # Anger, "Scintillation Camera with Multichannel Collimators", J Nucl Med 5:515-531 (1964).
+                # Axial and transaxial responses use their respective collimator septa lengths.
+                rg_z = 2. * options.colR * distance_from_exit / col_l_z
+                rg_xy = 2. * options.colR * distance_from_exit / col_l_xy
+                rg_z[rg_z < 0] = 0.
+                rg_xy[rg_xy < 0] = 0.
                 FWHMrot = 1.
 
-                FWHM = np.sqrt(Rg**2 + options.iR**2)
-                FWHM_pixel = FWHM / options.dx[0]
-                expr = FWHM_pixel**2 - FWHMrot**2
+                fwhm_z = np.sqrt(rg_z**2 + options.iR**2)
+                fwhm_xy = np.sqrt(rg_xy**2 + options.iR**2)
+                fwhm_z_pixel = fwhm_z / options.dz[0]
+                fwhm_xy_pixel = fwhm_xy / options.dy[0]
+                expr = fwhm_xy_pixel**2 - FWHMrot**2
                 expr[expr <= 0] = 10**-16
 
-                FWHM_WithinPlane = np.sqrt(expr)
-                #Parametrit CDR-mallinnukseen
-                options.sigmaZ = FWHM_pixel / (2. * np.sqrt(2. * np.log(2.)))
-                options.sigmaXY = FWHM_WithinPlane / (2. * np.sqrt(2. * np.log(2.)))
+                # Rotation interpolation already contributes one pixel of in-plane blur; retain the existing compensation there.
+                options.sigmaZ = fwhm_z_pixel / (2. * np.sqrt(2. * np.log(2.)))
+                options.sigmaXY = np.sqrt(expr) / (2. * np.sqrt(2. * np.log(2.)))
 
             maxI = max(options.Nx[0].item(), max(options.Ny[0].item(), options.Nz[0].item()))
             y = np.arange(maxI // 2 - 1, -maxI // 2, -1, dtype=np.float32).reshape((1, -1), order='F')
@@ -1006,7 +1017,9 @@ def SPECTParameters(options: proj.projectorClass):
 
         panelTilt = options.swivelAngles - options.angles + 180
         options.blurPlanes = np.round((options.FOVa_x / 2 - (options.radiusPerProj * np.cos(np.deg2rad(panelTilt)) - options.CORtoDetectorSurface)) / options.dx)
-        options.blurPlanes2 = options.radiusPerProj * np.sin(np.deg2rad(panelTilt)) / options.dx
+        # Retain the detector-panel displacement in millimetres for the MPS custom operator.  It converts this distance to fractional pixels using the translated axis' pitch for the current image volume. Keep blurPlanes2 as the integer native-projector representation.
+        options.blurPlanes2Linear = options.radiusPerProj * np.sin(np.deg2rad(panelTilt))
+        options.blurPlanes2 = options.blurPlanes2Linear / options.dx
 
         if options.angles.size == 0:
             options.angles = (np.repeat(options.startAngle, (options.nProjections // options.nHeads)) + np.tile(np.arange(0,options.angleIncrement * (options.nProjections / options.nHeads),options.angleIncrement), (options.nHeads, 1)))
@@ -1018,4 +1031,5 @@ def SPECTParameters(options: proj.projectorClass):
         options.swivelAngles = options.swivelAngles.ravel('F').astype(dtype=np.float32)
         options.radiusPerProj = options.radiusPerProj.ravel('F').astype(dtype=np.float32)
         options.blurPlanes = options.blurPlanes.ravel('F').astype(dtype=np.int32)
+        options.blurPlanes2Linear = options.blurPlanes2Linear.ravel('F').astype(dtype=np.float32)
         options.blurPlanes2 = options.blurPlanes2.ravel('F').astype(dtype=np.int32)

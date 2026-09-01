@@ -208,9 +208,9 @@ def initProjector(self):
         self.trIndex = self.trIndex.ravel('F')
         self.axIndex = self.axIndex.ravel('F')
 
-    if self.projector_type in [1, 11, 14, 15, 12, 13]:
+    if self.projector_type in [1, 11, 14, 15, 12, 13, 16]:
         self.FPType = 1
-    elif self.projector_type in [2, 21, 22, 23, 24, 25]:
+    elif self.projector_type in [2, 21, 22, 23, 24, 25, 26]:
         self.FPType = 2
     elif self.projector_type in [3, 31, 32, 33, 34, 35]:
         self.FPType = 3
@@ -218,13 +218,13 @@ def initProjector(self):
         self.FPType = 4
     elif self.projector_type in [5, 51, 52, 53, 54, 55]:
         self.FPType = 5
-    elif self.projector_type == 6:
+    elif self.projector_type in [6, 61, 62, 66]:
         self.FPType = 6
     else:
         raise ValueError('Invalid forward projector!')
-    if self.projector_type in [1, 11, 21, 31, 41, 51]:
+    if self.projector_type in [1, 11, 21, 31, 41, 51, 61]:
         self.BPType = 1
-    elif self.projector_type in [2, 12, 22, 32, 42, 52]:
+    elif self.projector_type in [2, 12, 22, 32, 42, 52, 62]:
         self.BPType = 2
     elif self.projector_type in [3, 13, 23, 33, 43, 53]:
         self.BPType = 3
@@ -232,7 +232,7 @@ def initProjector(self):
         self.BPType = 4
     elif self.projector_type in [5, 15, 25, 35, 45, 55]:
         self.BPType = 5
-    elif self.projector_type == 6:
+    elif self.projector_type in [6, 16, 26, 66]:
         self.BPType = 6
     else:
         raise ValueError('Invalid backprojector!')
@@ -247,10 +247,12 @@ def initProjector(self):
             self.useImages = False
     # if self.useAF == False and (self.FPType == 5 or self.BPType == 5):
     #     raise ValueError('Branchless distance-driven (projector type 5) can only be used with Arrayfire!')
-    if (self.useAF == False and self.useCuPy == False) and self.projector_type == 6:
-        raise ValueError('Projector type 6 can only be used with Arrayfire (OpenCL) or CuPy (CUDA)!')
+    if (self.useAF == False and self.useCuPy == False and not self.useMetal) and self.projector_type in (6, 66):
+        raise ValueError('Projector type 6 can only be used with Arrayfire (OpenCL), CuPy (CUDA), or PyTorch MPS!')
+    if self.projector_type in (16, 26, 61, 62) and not self.useMetal:
+        raise ValueError('Hybrid projector types 16, 26, 61, and 62 are supported only by the PyTorch MPS custom-operator path!')
         
-    if not self.projector_type == 6:
+    if self.FPType != 6 or self.BPType != 6:
         fPath = os.path.dirname( __file__ )
         if os.path.exists(os.path.join(fPath, '..', 'util', 'usingPyPi.py')):
             headerDir = os.path.abspath(os.path.join(os.path.dirname( __file__ ), '..', 'opencl')) + "/"
@@ -258,6 +260,8 @@ def initProjector(self):
             headerDir = os.path.abspath(os.path.join(os.path.dirname( __file__ ), '..', '..', '..', 'opencl')) + "/"
         with open(headerDir + 'general_opencl_functions.h', encoding="utf8") as f:
             hlines = f.read()
+        linesFP = None
+        linesBP = None
         if self.FPType in [1, 2, 3]:
             with open(headerDir + 'projectorType123.cl', encoding="utf8") as f:
                 linesFP = f.read()
@@ -394,15 +398,15 @@ def initProjector(self):
                 hlines2 = f.read()
             if self.FPType in [2, 3]:
                 linesFP = hlines + hlines2 + linesFP
-            else:
+            elif linesFP is not None:
                 linesFP = hlines + linesFP
             if self.BPType in [2, 3]:
                 linesBP = hlines + hlines2 + linesBP
-            else:
+            elif linesBP is not None:
                 linesBP = hlines + linesBP
         else:
-            linesFP = hlines + linesFP
-            linesBP = hlines + linesBP
+            linesFP = hlines + linesFP if linesFP is not None else None
+            linesBP = hlines + linesBP if linesBP is not None else None
         # if self.FPType == 3 or self.BPType == 3:
         #     bOpt += ('-DVOL',)
         if self.useMaskFP:
@@ -547,20 +551,22 @@ def initProjector(self):
             if self.meanBP:
                 bOptBP += ('-DMEANDISTANCEBP',)
     else:
+        headerDir = None
+        linesFP = None
+        linesBP = None
+        bOptFP = ()
+        bOptBP = ()
         if self.useCUDA:
             if self.useTorch:
                 #self.gFilter = np.ascontiguousarray(self.gFilter)
                 #self.gFilter = np.transpose(self.gFilter, (1, 0, 2))
                 self.d_gFilter = torch.tensor(self.gFilter, device='cuda')
-                self.angles = np.degrees(self.angles)
-                self.swivelAngles = np.degrees(self.swivelAngles)
                 #self.d_gFilter = self.d_gFilter.permute(2, 0, 1).unsqueeze(1)
-        else:
+        elif not self.useMetal:
             self.d_gFilter = af.interop.np_to_af_array(self.gFilter)
         self.uu = 0
     
     if self.useMetal:
-        # Compile FP + BP
         from omegatomo.projector.mps_backend import init_mps_projector
         init_mps_projector(
             self,
@@ -582,7 +588,7 @@ def initProjector(self):
         self.dSize = [None] * (self.nMultiVolumes + 1)
         self.d_Scale = [None] * (self.nMultiVolumes + 1)
         self.d_Scale4 = [None] * (self.nMultiVolumes + 1)
-        if self.projector_type != 6:
+        if self.FPType != 6 or self.BPType != 6:
             if self.useCuPy:
                 # if self.FPType == 5:
                 #     raise ValueError('Not yet supported')
@@ -801,7 +807,7 @@ def initProjector(self):
             else:
                 raise ValueError('Unsupported selection. Note that PyCUDA is no longer supported!')
     else:
-        if self.projector_type != 6:
+        if self.FPType != 6 or self.BPType != 6:
             
             self.no_norm = 1
             self.mSize = self.nRowsD * self.nColsD * self.nProjections
