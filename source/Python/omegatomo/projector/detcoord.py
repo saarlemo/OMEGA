@@ -304,8 +304,8 @@ def getCoordinatesSPECT(options: proj.projectorClass) -> Tuple[np.ndarray, np.nd
         x[1, ii] = r1 * np.sin(np.deg2rad(alpha1)) + r2 * np.sin(np.deg2rad(alpha2))
         x[2, ii] = 0
 
-        x[3, ii] = x[0, ii] + (options.colD + 0.5 * options.colL) * np.cos(np.deg2rad(alpha2))
-        x[4, ii] = x[1, ii] + (options.colD + 0.5 * options.colL) * np.sin(np.deg2rad(alpha2))
+        x[3, ii] = x[0, ii] + (options.colD + 0.5 * options.colLxy) * np.cos(np.deg2rad(alpha2))
+        x[4, ii] = x[1, ii] + (options.colD + 0.5 * options.colLxy) * np.sin(np.deg2rad(alpha2))
         x[5, ii] = 0
 
         z[0, ii] = np.cos(np.deg2rad(alpha2 + 90))
@@ -1056,18 +1056,12 @@ def SPECTParameters(options: proj.projectorClass):
                     options.rayShiftsSource[2 * kk + 1, :, :, :] = tmp_shift[2 * kk + 1]
 
         if options.projector_type in [1, 11, 12, 16, 21, 61]:
-            # Scale each source-detector shift difference so that the two angular response components use their corresponding septa lengths.
-            referenceLength = options.colD + 0.5 * options.colL
             lengthXY = options.colD + 0.5 * options.colLxy
             lengthZ = options.colD + 0.5 * options.colLz
-            if referenceLength != lengthZ:
-                detectorShiftXY = options.rayShiftsDetector[0::2, :, :, :]
-                options.rayShiftsSource[0::2, :, :, :] = detectorShiftXY + \
-                    (options.rayShiftsSource[0::2, :, :, :] - detectorShiftXY) * (referenceLength / lengthZ)
-            if referenceLength != lengthXY:
+            if lengthXY != lengthZ:
                 detectorShiftZ = options.rayShiftsDetector[1::2, :, :, :]
                 options.rayShiftsSource[1::2, :, :, :] = detectorShiftZ + \
-                    (options.rayShiftsSource[1::2, :, :, :] - detectorShiftZ) * (referenceLength / lengthXY)
+                    (options.rayShiftsSource[1::2, :, :, :] - detectorShiftZ) * (lengthXY / lengthZ)
 
         options.rayShiftsDetector = options.rayShiftsDetector.ravel('F')
         options.rayShiftsSource = options.rayShiftsSource.ravel('F')
