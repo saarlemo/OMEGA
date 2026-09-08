@@ -343,12 +343,7 @@ constexpr metal::sampler samplerMask(
 #define TEX19 [[buffer(19)]]
 #endif
 // Metal function definitions
-inline FLOAT dot(half3 a, half3 b) {
-    return metal::dot(a, b);
-}
-inline FLOAT dot(float3 a, float3 b) {
-    return metal::dot(a, b);
-}
+using metal::dot;
 
 #if defined(ATOMIC32)
 inline void atomicAdd(volatile device metal::atomic_int* addr, int val)

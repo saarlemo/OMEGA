@@ -1099,7 +1099,15 @@ classdef projectorClass
         end
 
         function obj = initCorrections(obj)
-            [obj.param] = loadCorrections(obj.param, [], []);
+            obj.param = loadCorrections(obj.param, [], []);
+            % Kernel correction arrays must follow the subset-ordered geometry,
+            % just as they do in reconstructions_main. Keep public measurement
+            % arrays in acquisition order for existing custom reconstruction loops.
+            measurements = obj.param.SinM;
+            additive = obj.param.SinDelayed;
+            obj.param = parseInputData(obj.param, obj.index);
+            obj.param.SinM = measurements;
+            obj.param.SinDelayed = additive;
         end
 
 

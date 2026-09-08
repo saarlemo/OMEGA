@@ -672,7 +672,7 @@ class projectorClass:
             self.dPitchY = self.dPitchX
         if self.cr_p > 0. and self.cr_pz == 0.:
             self.cr_pz = self.cr_p
-        if self.cr_p == 0. and self.dPitchX > 0.:
+        if not self.SPECT and self.cr_p == 0. and self.dPitchX > 0.:
             self.cr_p = self.dPitchX
         if self.cr_pz == 0. and self.dPitchY > 0.:
             self.cr_pz = self.dPitchY
@@ -965,7 +965,6 @@ class projectorClass:
                 self.dPitch = self.dPitchX
                 self.dPitchY = self.dPitchY
                 self.dPitchX = self.dPitchX
-                self.cr_p = self.dPitchX
             else:
                 self.dPitch = self.cr_p
                 self.dPitchY = self.cr_p
@@ -1905,7 +1904,6 @@ class projectorClass:
                     NyM6 = round(FOVyM6 / dyM)
                 
                 if self.axialEFOV and self.transaxialEFOV:
-                    from scipy.ndimage import zoom
                     self.nMultiVolumes = 6
                 
                     self.FOVa_x = np.array([
@@ -1980,67 +1978,6 @@ class projectorClass:
                 
                     print(f"Extended FOV is {FOVyM3 / self.FOVxOrig * 100:.2f} % of the original")
                 
-                    if self.x0.shape[0] == nx and np.min(self.x0) != np.max(self.x0):
-                        apu = zoom(self.x0, self.multiResolutionScale, order=1).astype(np.float32)
-                
-                        x1 = apu[
-                            self.Nx[3]:self.Nx[3] + self.Nx[1],
-                            self.Ny[5]:self.Ny[5] + self.Ny[1],
-                            :self.Nz[1]
-                        ]
-                        x2 = apu[self.Nx[4]:self.Nx[4] + self.Nx[2],
-                            self.Ny[6]:self.Ny[6] + self.Ny[2],
-                            -self.Nz[1]:]
-                        x3 = apu[:self.Nx[3], :, :]
-                        if apu.shape[0] % 2 == 0:
-                            x4 = apu[self.Nx[4] + self.Nx[2]:, :, :]
-                        else:
-                            x4 = apu[1 + self.Nx[4] + self.Nx[2]:, :, :]
-                        x5 = apu[
-                            self.Nx[3]:self.Nx[3] + self.Nx[1],
-                            :self.Ny[5],
-                            :self.Nz[3]
-                        ]
-                        if apu.shape[1] % 2 == 0:
-                            x6 = apu[
-                                self.Nx[4]:self.Nx[4] + self.Nx[2],
-                                self.Ny[6] + self.Ny[2]:,
-                                :self.Nz[4]
-                            ]
-                        else:
-                            x6 = apu[
-                                self.Nx[4]:self.Nx[4] + self.Nx[2],
-                                1 + self.Ny[6] + self.Ny[2]:,
-                                :self.Nz[4]
-                            ]
-                
-                        sx0 = self.x0.shape
-                        self.x0 = self.x0[
-                            int((sx0[0] - self.NxOrig) // 2):int((sx0[0] - self.NxOrig) // 2 + self.NxOrig),
-                            int((sx0[1] - self.NyOrig) // 2):int((sx0[1] - self.NyOrig) // 2 + self.NyOrig),
-                            int((sx0[2] - self.NzOrig) // 2):int((sx0[2] - self.NzOrig) // 2 + self.NzOrig)
-                        ].astype(np.float32)
-                
-                        self.x0 = np.concatenate([
-                            self.x0.ravel('F'), x1.ravel('F'), x2.ravel('F'),
-                            x3.ravel('F'), x4.ravel('F'), x5.ravel('F'),
-                            x6.ravel('F')
-                        ])
-                
-                    elif self.x0.shape[0] == self.NxOrig or np.min(self.x0) == np.max(self.x0):
-                        val = np.min(self.x0)
-                        self.x0 = self.x0[:self.Nx[0].item(), :self.Ny[0].item(),:self.Nz[0].item()]
-                        x1 = np.ones((self.Nx[1], self.Ny[1], self.Nz[1]), dtype=np.float32, order='F') * val
-                        x2 = np.ones((self.Nx[2], self.Ny[2], self.Nz[2]), dtype=np.float32, order='F') * val
-                        x3 = np.ones((self.Nx[3], self.Ny[3], self.Nz[3]), dtype=np.float32, order='F') * val
-                        x4 = np.ones((self.Nx[4], self.Ny[4], self.Nz[4]), dtype=np.float32, order='F') * val
-                        x5 = np.ones((self.Nx[5], self.Ny[5], self.Nz[5]), dtype=np.float32, order='F') * val
-                        x6 = np.ones((self.Nx[6], self.Ny[6], self.Nz[6]), dtype=np.float32, order='F') * val
-                        self.x0 = np.concatenate([
-                            self.x0.ravel('F'), x1.ravel('F'), x2.ravel('F'),
-                            x3.ravel('F'), x4.ravel('F'), x5.ravel('F'),
-                            x6.ravel('F')])
-                
                 elif self.transaxialEFOV and not self.axialEFOV:
                     self.nMultiVolumes = 4
                 
@@ -2096,29 +2033,6 @@ class projectorClass:
                 
                     print(f"Extended FOV is {FOVyM3 / self.FOVyOrig * 100:.2f} % of the original")
                 
-                    if self.x0.shape[0] == nx and np.min(self.x0) != np.max(self.x0):
-                        apu = zoom(self.x0, self.multiResolutionScale, order=1).astype(np.float32)
-                        self.x1 = apu[self.Nx[1]:self.Nx[1] + self.Nx[0], :, :]
-                        if apu.shape[0] % 2 == 0:
-                            self.x2 = apu[self.Nx[2] + self.Nx[0]:, :, :]
-                        else:
-                            self.x2 = apu[1 + self.Nx[2] + self.Nx[0]:, :, :]
-                
-                        sx0 = self.x0.shape
-                        self.x0 = self.x0[
-                            int((sx0[0] - self.NxOrig) // 2):int((sx0[0] - self.NxOrig) // 2 + self.NxOrig),
-                            int((sx0[1] - self.NyOrig) // 2):int((sx0[1] - self.NyOrig) // 2 + self.NyOrig),
-                            int((sx0[2] - self.NzOrig) // 2):int((sx0[2] - self.NzOrig) // 2 + self.NzOrig)
-                        ].astype(np.float32)
-                
-                        self.x0 = np.concatenate([self.x0.ravel('F'), x1.ravel('F'), x2.ravel('F')])
-                
-                    elif self.x0.shape[0] == self.NxOrig or np.min(self.x0) == np.max(self.x0):
-                        val = np.min(self.x0)
-                        self.x0 = self.x0[:self.Nx[0].item(), :self.Ny[0].item(),:]
-                        x1 = np.ones((self.Nx[1], self.Ny[1], self.Nz[1]), dtype=np.float32, order='F') * val
-                        x2 = np.ones((self.Nx[2], self.Ny[2], self.Nz[2]), dtype=np.float32, order='F') * val
-                        self.x0 = np.concatenate([self.x0.ravel('F'), x1.ravel('F'), x2.ravel('F')])
                 elif not self.transaxialEFOV and self.axialEFOV:
                     self.nMultiVolumes = 2
                 
@@ -2160,27 +2074,11 @@ class projectorClass:
                 
                     print(f"Extended FOV is {(FOVzM1 + FOVzM2 + self.axialFOVOrig) / self.axialFOVOrig * 100:.2f} % of the original")
                 
-                    if self.x0.shape[0] == nx and np.min(self.x0) != np.max(self.x0):
-                        apu = zoom(self.x0, self.multiResolutionScale, order=1).astype(np.float32)
-                        x1 = apu[:, :, :self.Nz[1]]
-                        x2 = apu[:, :, -self.Nz[2]:]
-                
-                        sx0 = self.x0.shape
-                        self.x0 = self.x0[
-                            int((sx0[0] - self.NxOrig) // 2):int((sx0[0] - self.NxOrig) // 2 + self.NxOrig),
-                            int((sx0[1] - self.NyOrig) // 2):int((sx0[1] - self.NyOrig) // 2 + self.NyOrig),
-                            int((sx0[2] - self.NzOrig) // 2):int((sx0[2] - self.NzOrig) // 2 + self.NzOrig)
-                        ].astype(np.float32)
-                
-                        self.x0 = np.concatenate([self.x0.ravel('F'), x1.ravel('F'), x2.ravel('F')])
-                
-                    elif self.x0.shape[0] == self.NxOrig or np.min(self.x0) == np.max(self.x0):
-                        val = np.min(self.x0)
-                        self.x0 = self.x0[:, :,:self.Nz[0].item()]
-                        x1 = np.ones((self.Nx[1], self.Ny[1], self.Nz[1]), dtype=np.float32, order='F') * val
-                        x2 = np.ones((self.Nx[2], self.Ny[2], self.Nz[2]), dtype=np.float32, order='F') * val
-                        self.x0 = np.concatenate([self.x0.ravel('F'), x1.ravel('F'), x2.ravel('F')])
-                
+                from omegatomo.util.multiresolution import pack_multiresolution
+                self.x0 = pack_multiresolution(self.x0, self)
+                if self.useMaskBP and self.maskBP.size > 1:
+                    self.maskBP = pack_multiresolution(self.maskBP, self, mask=True)
+                    self.maskBPZ = int(np.max(self.Nz))
                 self.NxPrior = self.Nx[0].item()
                 self.NyPrior = self.Ny[0].item()
                 self.NzPrior = self.Nz[0].item()

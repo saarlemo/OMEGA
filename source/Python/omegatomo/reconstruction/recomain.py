@@ -218,12 +218,13 @@ def transferData(options):
     options.param.orthAxial = ctypes.c_bool(options.orthAxial)
     options.param.enforcePositivity = ctypes.c_bool(options.enforcePositivity)
     options.param.useMultiResolutionVolumes = ctypes.c_bool(options.useMultiResolutionVolumes)
+    options.param.storeMultiResolution = ctypes.c_bool(options.storeMultiResolution)
     options.param.save_iter = ctypes.c_bool(options.save_iter)
     options.param.deblurring = ctypes.c_bool(options.deblurring)
     options.param.useMAD = ctypes.c_bool(options.useMAD)
     options.param.useImages = ctypes.c_bool(options.useImages)
     options.param.useEFOV = ctypes.c_bool(options.useEFOV)
-    options.param.CTAttenuation = ctypes.c_bool(options.CTAttenuation)
+    options.param.CTAttenuation = ctypes.c_bool(options.CT_attenuation)
     options.param.offsetCorrection = ctypes.c_bool(options.offsetCorrection)
     options.param.relaxationScaling = ctypes.c_bool(options.relaxationScaling)
     options.param.computeRelaxationParameters = ctypes.c_bool(options.computeRelaxationParameters)
@@ -370,12 +371,14 @@ def transferData(options):
     options.param.TOFIndices = options.TOFIndices.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
     options.param.angles = options.angles.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
     options.param.swivelAngles = options.swivelAngles.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-    options.param.blurPlanes = options.blurPlanes[0].ctypes.data_as(ctypes.POINTER(ctypes.c_int32))
-    options.param.blurPlanes2 = options.blurPlanes2[0].ctypes.data_as(ctypes.POINTER(ctypes.c_int32))
-    # Python custom type-6 stores one CDRF per volume.  The native branch is
-    # still single-filter, so retain its established volume-0 interface here.
-    options.param.gFilter = options.gFilter[0].ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-    options.gFSize = np.array(options.gFilter[0].shape, dtype=np.uint64)
+    # Only type-6 uses per-volume lists. Other projectors retain empty arrays.
+    blur_planes = options.blurPlanes[0] if isinstance(options.blurPlanes, list) else options.blurPlanes
+    blur_planes2 = options.blurPlanes2[0] if isinstance(options.blurPlanes2, list) else options.blurPlanes2
+    g_filter = options.gFilter[0] if isinstance(options.gFilter, list) else options.gFilter
+    options.param.blurPlanes = blur_planes.ctypes.data_as(ctypes.POINTER(ctypes.c_int32))
+    options.param.blurPlanes2 = blur_planes2.ctypes.data_as(ctypes.POINTER(ctypes.c_int32))
+    options.param.gFilter = g_filter.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    options.gFSize = np.array(g_filter.shape if g_filter.size else (0, 0, 0), dtype=np.uint64)
     options.param.gFSize = options.gFSize.ctypes.data_as(ctypes.POINTER(ctypes.c_uint64))
     options.param.precondTypeImage = options.precondTypeImage.ctypes.data_as(ctypes.POINTER(ctypes.c_bool))
     options.param.precondTypeMeas = options.precondTypeMeas.ctypes.data_as(ctypes.POINTER(ctypes.c_bool))
@@ -405,7 +408,12 @@ def transferData(options):
     #For SPECT...
     options.param.rayShiftsDetector = options.rayShiftsDetector.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
     options.param.rayShiftsSource = options.rayShiftsSource.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-    options.param.detectorVector = options.DetectorVector.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32))
+    # Geometry is subset ordered; detector-head indices must use the same order.
+    frames = getattr(options, 'DetectorVectorFrames', None)
+    options._native_detector_vector = np.ascontiguousarray(
+        np.concatenate(frames) if options.SPECT and isinstance(frames, list) else options.DetectorVector,
+        dtype=np.uint32)
+    options.param.detectorVector = options._native_detector_vector.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32))
     options.param.coneOfResponseStdCoeffA = ctypes.c_float(options.coneOfResponseStdCoeffA)
     options.param.coneOfResponseStdCoeffB = ctypes.c_float(options.coneOfResponseStdCoeffB)
     options.param.coneOfResponseStdCoeffC = ctypes.c_float(options.coneOfResponseStdCoeffC)

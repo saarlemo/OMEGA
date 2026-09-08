@@ -78,14 +78,14 @@ def computePixelSize(options):
                 else:
                     options.by[kk] = options.oOffsetY - FOV[0][1] / 2 - FOV[kk,1]
                 options.bx[kk] = xx[0]
-                options.bz[kk] = zz[0]
+                options.bz[kk] = zz[0] + options.eFOVShift[2]
             elif (kk > 2 and kk < 5) or (FOV.shape[0] == 5 and kk > 0):
                 if kk % 2 == 0:
                     options.bx[kk] = etaisyys[0,0] + options.oOffsetX + FOV[0,0]
                 else:
                     options.bx[kk] = etaisyys[0,0] + options.oOffsetX - FOV[kk,0]
-                options.by[kk] = yy[0]
-                options.bz[kk] = zz[0]
+                options.by[kk] = yy[0] + options.eFOVShift[1]
+                options.bz[kk] = zz[0] + options.eFOVShift[2]
             elif kk > 0 and kk < 3:
                 options.bx[kk] = xx[0]
                 options.by[kk] = yy[0]
