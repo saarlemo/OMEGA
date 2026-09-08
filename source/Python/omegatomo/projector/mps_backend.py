@@ -464,7 +464,12 @@ def _upload_static_buffers(self: Any, torch: Any) -> None:
         self.d_maskBP = _mps_tensor_from_numpy(torch, self.maskBP.ravel(order='F'), np.uint8)
 
     if int(getattr(self, 'FPType', 0)) == 6 or int(getattr(self, 'BPType', 0)) == 6:
-        self.d_gFilter = _mps_tensor_from_numpy(torch, self.gFilter, np.float32)
+        if isinstance(self.gFilter, (list, tuple)) and len(self.gFilter):
+            self.d_gFilter = [
+                _mps_tensor_from_numpy(torch, value, np.float32) for value in self.gFilter
+            ]
+        else:
+            self.d_gFilter = _mps_tensor_from_numpy(torch, self.gFilter, np.float32)
 
 
 def _geometry_buffer(self: Any, name: str, timestep: int, subset: int) -> Any:

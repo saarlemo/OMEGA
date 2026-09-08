@@ -330,10 +330,12 @@ def transferData(options):
     options.param.TOFIndices = options.TOFIndices.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
     options.param.angles = options.angles.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
     options.param.swivelAngles = options.swivelAngles.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-    options.param.blurPlanes = options.blurPlanes.ctypes.data_as(ctypes.POINTER(ctypes.c_int32))
-    options.param.blurPlanes2 = options.blurPlanes2.ctypes.data_as(ctypes.POINTER(ctypes.c_int32))
-    options.param.gFilter = options.gFilter.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-    options.gFSize = np.array(options.gFilter.shape, dtype=np.uint64)
+    options.param.blurPlanes = options.blurPlanes[0].ctypes.data_as(ctypes.POINTER(ctypes.c_int32))
+    options.param.blurPlanes2 = options.blurPlanes2[0].ctypes.data_as(ctypes.POINTER(ctypes.c_int32))
+    # Python custom type-6 stores one CDRF per volume.  The native branch is
+    # still single-filter, so retain its established volume-0 interface here.
+    options.param.gFilter = options.gFilter[0].ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    options.gFSize = np.array(options.gFilter[0].shape, dtype=np.uint64)
     options.param.gFSize = options.gFSize.ctypes.data_as(ctypes.POINTER(ctypes.c_uint64))
     options.param.precondTypeImage = options.precondTypeImage.ctypes.data_as(ctypes.POINTER(ctypes.c_bool))
     options.param.precondTypeMeas = options.precondTypeMeas.ctypes.data_as(ctypes.POINTER(ctypes.c_bool))

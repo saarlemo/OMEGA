@@ -895,6 +895,129 @@ def sinogramCoordinates3D(options, layers = (1,1)):
     return z
 
 
+def _type6_scalar(values, volume: int) -> float:
+    """Read a scalar image-geometry value for one type-6 volume."""
+    values = np.asarray(values).reshape(-1)
+    if values.size == 0:
+        raise ValueError('Missing type-6 image geometry')
+    return float(values[min(volume, values.size - 1)])
+
+
+def _type6_auto_filter(options: proj.projectorClass, volume: int, depth: int | None = None) -> np.ndarray:
+    """Generate one rotation-projector CDRF on a volume's pixel grid."""
+    nx = int(np.asarray(options.Nx).reshape(-1)[volume])
+    ny = int(np.asarray(options.Ny).reshape(-1)[volume])
+    nz = int(np.asarray(options.Nz).reshape(-1)[volume])
+    dx = _type6_scalar(options.dx, volume)
+    dy = _type6_scalar(options.dy, volume)
+    dz = _type6_scalar(options.dz, volume)
+    if min(dx, dy, dz) <= 0.:
+        raise ValueError(f'Type-6 volume {volume} has a non-positive voxel pitch')
+
+    sigma_z_input = np.asarray(options.sigmaZ, dtype=np.float32)
+    sigma_xy_input = np.asarray(options.sigmaXY, dtype=np.float32)
+    if sigma_z_input.size != 1 or sigma_xy_input.size != 1:
+        raise ValueError(
+            'Multi-resolution projector type 6 currently requires scalar '
+            'sigmaZ and sigmaXY, or an explicit gFilter entry for each volume.'
+        )
+
+    depth = max(nx * 4, int(depth or 0))
+    if float(sigma_z_input.reshape(-1)[0]) < 0.:
+        distances = 0.5 * dx + np.arange(depth, dtype=np.float32) * dx
+        col_l_xy = float(options.colLxy) if options.colLxy > 0. else float(options.colL)
+        col_l_z = float(options.colLz) if options.colLz > 0. else float(options.colL)
+        distance_from_exit = distances + float(options.cr_p) / 2.
+        rg_z = np.maximum(0., 2. * float(options.colR) * distance_from_exit / col_l_z)
+        rg_xy = np.maximum(0., 2. * float(options.colR) * distance_from_exit / col_l_xy)
+        fwhm_z = np.sqrt(rg_z**2 + float(options.iR)**2) / dz
+        fwhm_xy = np.sqrt(rg_xy**2 + float(options.iR)**2) / dy
+        sigma_z = fwhm_z / (2. * np.sqrt(2. * np.log(2.)))
+        sigma_xy = np.sqrt(np.maximum(fwhm_xy**2 - 1., 1e-16)) / (2. * np.sqrt(2. * np.log(2.)))
+    else:
+        sigma_z = np.full(depth, float(sigma_z_input.reshape(-1)[0]), dtype=np.float32)
+        sigma_xy = np.full(depth, float(sigma_xy_input.reshape(-1)[0]), dtype=np.float32)
+
+    max_i = max(nx, ny, nz)
+    coordinates = np.arange(max_i // 2 - 1, -max_i // 2, -1, dtype=np.float32)
+    xx, yy = np.meshgrid(coordinates, coordinates, indexing='ij')
+    kernel = np.exp(
+        -(xx[:, :, None]**2 / (2. * sigma_z[None, None, :]**2)
+          + yy[:, :, None]**2 / (2. * sigma_xy[None, None, :]**2))
+    )
+    mid_slice = kernel[:, :, kernel.shape[2] // 4]
+    row, col = np.where(mid_slice > 1e-6)
+    if row.size == 0 or col.size == 0:
+        raise ValueError(f'Type-6 PSF for volume {volume} has empty support')
+    kernel = kernel[row.min():row.max() + 1, col.min():col.max() + 1, :]
+    return np.asfortranarray((kernel / np.sum(kernel, axis=(0, 1), keepdims=True)).astype(np.float32))
+
+
+def _type6_multires_filter_resources(options: proj.projectorClass, volumes: int, depth_planes: np.ndarray) -> list[np.ndarray]:
+    """Return one CDRF resource per volume for the Python custom operator."""
+    provided = options.gFilter
+    if isinstance(provided, (list, tuple)) and len(provided) > 0:
+        if len(provided) != volumes:
+            raise ValueError(f'gFilter must contain {volumes} filters, got {len(provided)}')
+        filters = [np.asarray(value, dtype=np.float32) for value in provided]
+    elif np.asarray(options.gFilter).size:
+        raise ValueError(
+            'A single gFilter is ambiguous for multi-resolution projector type 6. '
+            'Provide one filter per volume as a gFilter list, or leave gFilter empty '
+            'to generate the physical CDRFs automatically.'
+        )
+    else:
+        filters = [
+            _type6_auto_filter(options, volume, int(depth_planes[volume]))
+            for volume in range(volumes)
+        ]
+    for volume, kernel in enumerate(filters):
+        if kernel.ndim != 3 or min(kernel.shape) < 1:
+            raise ValueError(f'gFilter[{volume}] must be a non-empty 3-D CDRF')
+        filters[volume] = np.asfortranarray(kernel.astype(np.float32))
+    return filters
+
+
+def _type6_multires_geometry(options: proj.projectorClass, volumes: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Create volume/view panel shifts without flattening image volumes into views."""
+    panel_tilt = np.asarray(options.swivelAngles, dtype=np.float32).reshape(-1) - \
+        np.asarray(options.angles, dtype=np.float32).reshape(-1) + 180.
+    radius = np.asarray(options.radiusPerProj, dtype=np.float32).reshape(-1)
+    if panel_tilt.size != radius.size:
+        raise ValueError('Type-6 swivelAngles, angles, and radiusPerProj must have matching view counts')
+    linear = radius * np.sin(np.deg2rad(panel_tilt))
+    blur_planes = np.empty((volumes, radius.size), dtype=np.int32)
+    blur_planes2 = np.empty_like(blur_planes)
+    blur_planes2_linear = np.broadcast_to(linear, (volumes, radius.size)).copy()
+    for volume in range(volumes):
+        fov_x = _type6_scalar(options.FOVa_x, volume)
+        dx = _type6_scalar(options.dx, volume)
+        dy = _type6_scalar(options.dy, volume)
+        if min(fov_x, dx, dy) <= 0.:
+            raise ValueError(f'Type-6 volume {volume} has invalid FOV or voxel pitch')
+        depth_mm = fov_x / 2. - (radius * np.cos(np.deg2rad(panel_tilt)) - float(options.CORtoDetectorSurface))
+        blur_planes[volume] = np.rint(depth_mm / dx).astype(np.int32)
+        # The custom helper shifts image axis 1 (the y axis), hence dy rather
+        # than dx is the physical conversion for this in-plane panel offset.
+        blur_planes2[volume] = np.rint(linear / dy).astype(np.int32)
+    return blur_planes, blur_planes2, blur_planes2_linear
+
+
+def _type6_total_lengths(options: proj.projectorClass) -> np.ndarray:
+    """Full type-6 ray lengths, independent of EFOV volume decomposition."""
+    full_fov_x = float(getattr(options, 'type6FullFOVaX', _type6_scalar(options.FOVa_x, 0)))
+    full_nx = int(getattr(options, 'type6FullNx', int(np.asarray(options.Nx).reshape(-1)[0])))
+    if full_fov_x <= 0. or full_nx < 1:
+        raise ValueError('Type-6 full image geometry is invalid')
+    full_dx = full_fov_x / full_nx
+    panel_tilt = np.asarray(options.swivelAngles, dtype=np.float32).reshape(-1) - \
+        np.asarray(options.angles, dtype=np.float32).reshape(-1) + 180.
+    radius = np.asarray(options.radiusPerProj, dtype=np.float32).reshape(-1)
+    depth_mm = full_fov_x / 2. - (radius * np.cos(np.deg2rad(panel_tilt)) - float(options.CORtoDetectorSurface))
+    retained = np.maximum(1, full_nx - np.maximum(np.rint(depth_mm / full_dx).astype(np.int64), 0))
+    return np.asarray(retained * full_dx, dtype=np.float32)
+
+
 def SPECTParameters(options: proj.projectorClass):
     if options.projector_type in [1, 11, 12, 16, 2, 21, 22, 26, 61, 62]: # Ray tracing projectors
         nRays = int(options.n_rays_transaxial * options.n_rays_axial)
@@ -958,6 +1081,63 @@ def SPECTParameters(options: proj.projectorClass):
             options.coneOfResponseStdCoeffC = options.iR
 
     if options.projector_type in (6, 16, 26, 61, 62, 66): # Rotation-based projector side
+        volume_count = max(
+            np.asarray(options.Nx).size,
+            np.asarray(options.Ny).size,
+            np.asarray(options.Nz).size,
+            np.asarray(options.dx).size,
+            np.asarray(options.dy).size,
+            np.asarray(options.dz).size,
+        )
+        if volume_count > 1:
+            # Multi-resolution image geometry is established before this
+            # function runs.  Keep it indexed by (volume, view): flattening
+            # it here used to mix the volume and view axes, and failed before
+            # custom type-6 operators could be constructed.
+            if options.angles.size == 0:
+                options.angles = (
+                    np.repeat(options.startAngle, (options.nProjections // options.nHeads)) +
+                    np.tile(
+                        np.arange(0, options.angleIncrement * (options.nProjections / options.nHeads), options.angleIncrement),
+                        (options.nHeads, 1),
+                    )
+                )
+            options.angles = np.asarray(options.angles, dtype=np.float32).ravel('F')
+            options.swivelAngles = np.asarray(options.swivelAngles, dtype=np.float32).ravel('F')
+            options.radiusPerProj = np.asarray(options.radiusPerProj, dtype=np.float32).ravel('F')
+            if not (options.angles.size == options.swivelAngles.size == options.radiusPerProj.size):
+                raise ValueError('Multi-resolution type-6 geometry needs one angle, swivel angle, and radius per view')
+
+            (
+                options.blurPlanes,
+                options.blurPlanes2,
+                options.blurPlanes2Linear,
+            ) = _type6_multires_geometry(options, volume_count)
+            # Shifted CDRFs must include every depth plane selected by this
+            # volume's panel geometry, not only its local Nx planes.
+            nx = np.asarray(options.Nx, dtype=np.int64).reshape(-1)[:volume_count]
+            filter_depth = nx + np.max(np.abs(options.blurPlanes), axis=1)
+            options.gFilter = _type6_multires_filter_resources(options, volume_count, filter_depth)
+            options.type6TotalLength = _type6_total_lengths(options)
+            if not options.useTotLength:
+                raise ValueError(
+                    'Multi-resolution projector type 6 requires useTotLength=True so one '
+                    'measurement is allocated across all volumes with one common ray length.'
+                )
+
+            # Type-6 PSF/geometry is always indexed by volume after setup.
+            # Native callers extract entry zero at their compatibility boundary.
+            options.uu = 1
+            options.ub = 1
+            return
+
+        # Accept the same one-entry gFilter list used by the custom
+        # multi-resolution path, while retaining the established local
+        # single-volume calculation below.
+        if isinstance(options.gFilter, (list, tuple)):
+            if len(options.gFilter) > 1:
+                raise ValueError('Single-volume projector type 6 accepts exactly one gFilter entry')
+            options.gFilter = np.empty(0, dtype=np.float32) if len(options.gFilter) == 0 else np.asarray(options.gFilter[0])
         DistanceToFirstRow = 0.5 * options.dx
         # ``addProjector`` normalizes image dimensions to one-element arrays.
         # NumPy 2 no longer accepts such an array as the length for arange.
@@ -1026,10 +1206,11 @@ def SPECTParameters(options: proj.projectorClass):
         options.uu = 1
         options.ub = 1
 
-        options.gFilter = np.asfortranarray(options.gFilter.astype(dtype=np.float32))
+        options.gFilter = [np.asfortranarray(options.gFilter.astype(dtype=np.float32))]
         options.angles = options.angles.ravel('F').astype(dtype=np.float32)
         options.swivelAngles = options.swivelAngles.ravel('F').astype(dtype=np.float32)
         options.radiusPerProj = options.radiusPerProj.ravel('F').astype(dtype=np.float32)
-        options.blurPlanes = options.blurPlanes.ravel('F').astype(dtype=np.int32)
-        options.blurPlanes2Linear = options.blurPlanes2Linear.ravel('F').astype(dtype=np.float32)
-        options.blurPlanes2 = options.blurPlanes2.ravel('F').astype(dtype=np.int32)
+        options.blurPlanes = options.blurPlanes.ravel('F').astype(dtype=np.int32)[None, :]
+        options.blurPlanes2Linear = options.blurPlanes2Linear.ravel('F').astype(dtype=np.float32)[None, :]
+        options.blurPlanes2 = options.blurPlanes2.ravel('F').astype(dtype=np.int32)[None, :]
+        options.type6TotalLength = _type6_total_lengths(options)

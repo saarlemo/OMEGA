@@ -560,10 +560,16 @@ def initProjector(self):
             if self.useTorch:
                 #self.gFilter = np.ascontiguousarray(self.gFilter)
                 #self.gFilter = np.transpose(self.gFilter, (1, 0, 2))
-                self.d_gFilter = torch.tensor(self.gFilter, device='cuda')
+                if isinstance(self.gFilter, (list, tuple)) and len(self.gFilter):
+                    self.d_gFilter = [torch.tensor(value, device='cuda') for value in self.gFilter]
+                else:
+                    self.d_gFilter = torch.tensor(self.gFilter, device='cuda')
                 #self.d_gFilter = self.d_gFilter.permute(2, 0, 1).unsqueeze(1)
         elif not self.useMetal:
-            self.d_gFilter = af.interop.np_to_af_array(self.gFilter)
+            if isinstance(self.gFilter, (list, tuple)) and len(self.gFilter):
+                self.d_gFilter = [af.interop.np_to_af_array(value) for value in self.gFilter]
+            else:
+                self.d_gFilter = af.interop.np_to_af_array(self.gFilter)
         self.uu = 0
     
     if self.useMetal:

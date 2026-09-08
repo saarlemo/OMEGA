@@ -1476,6 +1476,42 @@ def resample_resize_proj6(value: Any, options: Any, volume: int = 0, *, directio
     return _proj6_resize_numpy(value, source, target, physical, mode, direction, expected_frames, strict)
 
 
+def _type6_volume_view_value(self: Any, name: str, volume: int, view: int) -> int | float:
+    """Read a custom type-6 geometry item without mixing volume and view axes."""
+    values = np.asarray(getattr(self, name))
+    if values.ndim == 2 and values.size:
+        if volume >= values.shape[0] or view >= values.shape[1]:
+            raise IndexError(f'{name} has no geometry for volume {volume}, view {view}')
+        return values[volume, view].item()
+    values = values.reshape(-1)
+    if view >= values.size:
+        raise IndexError(f'{name} has no geometry for view {view}')
+    return values[view].item()
+
+
+def _type6_volume_kernel(self: Any, volume: int) -> Any:
+    """Select the CDRF sampled on the requested volume's pixel grid."""
+    filters = self.gFilter
+    if isinstance(filters, (list, tuple)) and len(filters):
+        if volume >= len(filters):
+            raise IndexError(f'gFilter has no filter for volume {volume}')
+        return filters[volume]
+    return filters
+
+
+def _type6_path_weight(self: Any, volume: int, view: int, nx: int) -> float:
+    """Physical x-segment weight for one type-6 volume/view contribution."""
+    dx = float(np.asarray(self.dx).reshape(-1)[volume])
+    if getattr(self, 'useTotLength', True):
+        lengths = np.asarray(getattr(self, 'type6TotalLength', np.empty(0))).reshape(-1)
+        if view >= lengths.size or lengths[view] <= 0.:
+            raise ValueError(f'Type-6 total ray length is missing or invalid for view {view}')
+        return dx / float(lengths[view])
+    # Preserve the legacy, local-FOV normalization when explicitly requested.
+    retained = max(1, nx - max(int(_type6_volume_view_value(self, 'blurPlanes', volume, view)), 0))
+    return 1. / retained
+
+
 def _type6_torch_resource(self: Any, name: str, timestep: int, subset: int, *, fallback: Any, dtype: Any, device: Any) -> Any:
     """Return a type-6 correction buffer on the current Torch device."""
     import torch
@@ -1780,7 +1816,12 @@ def _type6_arrayfire_ops(self: Any):
             host_resource('d_attenuation_image', timestep, subset, getattr(self, 'vaimennus', np.empty(0))),
             (int(self.Nz[volume]), int(self.Ny[volume]), int(self.Nx[volume])),
         ),
-        kernel=lambda timestep, subset, like: getattr(self, 'd_gFilter', af.interop.np_to_af_array(self.gFilter)),
+        kernel=lambda volume, timestep, subset, like: (
+            getattr(self, 'd_gFilter', [])[volume]
+            if isinstance(getattr(self, 'd_gFilter', None), list)
+            and volume < len(getattr(self, 'd_gFilter', []))
+            else getattr(self, 'd_gFilter', af.interop.np_to_af_array(_type6_volume_kernel(self, volume)))
+        ),
         weights=measurement_weights,
         apply_bp_mask=apply_bp_mask,
         device=lambda value: None,
@@ -1883,9 +1924,14 @@ def _type6_torch_ops(self: Any):
             self, 'd_attenuation_image', timestep, subset,
             fallback=getattr(self, 'vaimennus', np.empty(0)), dtype=like.dtype, device=like.device,
         ),
-        kernel=lambda timestep, subset, like: _type6_torch_resource(
-            self, 'd_gFilter', timestep, subset,
-            fallback=self.gFilter, dtype=like.dtype, device=like.device,
+        kernel=lambda volume, timestep, subset, like: (
+            getattr(self, 'd_gFilter', [])[volume].to(device=like.device, dtype=like.dtype)
+            if isinstance(getattr(self, 'd_gFilter', None), list)
+            and volume < len(getattr(self, 'd_gFilter', []))
+            else _type6_torch_resource(
+                self, 'd_gFilter', timestep, subset,
+                fallback=_type6_volume_kernel(self, volume), dtype=like.dtype, device=like.device,
+            )
         ),
         weights=lambda data, projections, timestep, subset: _type6_torch_measurement_weights(
             self, data, projections, timestep, subset,
@@ -1906,30 +1952,23 @@ def type6_forward(self: Any, image: Any, output: Any, volume: int, subset: int, 
     attenuation = None
     if self.attenuation_correction and self.CTAttenuation and volume == 0:
         attenuation = ops.reshape_image(ops.attenuation_image(volume, timestep, subset, image), (nz, ny, nx))
-    kernel = ops.kernel(timestep, subset, image)
+    kernel = ops.kernel(volume, timestep, subset, image)
     image_views = ops.zeros((projections, nz, nx), image)
     for local_view in range(projections):
         view = start + local_view
         angle = float(self.swivelAngles[view])
         rotated = ops.rotate(source, angle)
-        # Native type 6 applies the view-dependent detector-panel offset in
-        # the rotated 3-D detector frame before attenuation and PSF blur.
-        rotated = ops.shift_image_y(rotated, -int(self.blurPlanes2[view]))
+        rotated = ops.shift_image_y(rotated, -int(_type6_volume_view_value(self, 'blurPlanes2', volume, view)))
         if attenuation is not None:
             attenuation_rotated = ops.rotate(attenuation, angle)
             attenuation_rotated = ops.shift_image_y(
-                attenuation_rotated, -int(self.blurPlanes2[view])
+                attenuation_rotated, -int(_type6_volume_view_value(self, 'blurPlanes2', volume, view))
             )
             rotated = ops.attenuation(rotated, attenuation_rotated, float(self.dx[volume]))
-        depth_shift = int(self.blurPlanes[view])
+        depth_shift = int(_type6_volume_view_value(self, 'blurPlanes', volume, view))
         shifted_kernel = ops.shift_kernel(kernel, depth_shift, nx)
         blurred = ops.blur(rotated, shifted_kernel)
-        # Positive depth shifts zero-pad the near end of the Nx-plane working
-        # PSF and discard the same number of far-end planes.  Negative shifts
-        # select later planes from the extended distance-dependent PSF lookup,
-        # so the full Nx-plane working window remains populated.
-        retained_planes = max(1, nx - max(depth_shift, 0))
-        projection = ops.sum_x(blurred) / retained_planes
+        projection = ops.sum_x(blurred) * _type6_path_weight(self, volume, view, nx)
         if int(projection.shape[0]) != nz or int(projection.shape[1]) != nx:
             projection = ops.resize(projection, (nz, nx))
         ops.set_view(image_views, local_view, projection)
@@ -1954,7 +1993,7 @@ def type6_backward(self: Any, y: Any, output: Any, volume: int, subset: int, tim
     attenuation = None
     if self.attenuation_correction and self.CTAttenuation and volume == 0:
         attenuation = ops.reshape_image(ops.attenuation_image(volume, timestep, subset, y), (nz, ny, nx))
-    kernel = ops.kernel(timestep, subset, y)
+    kernel = ops.kernel(volume, timestep, subset, y)
     image = ops.zeros((nz, ny, nx), y)
     for local_view in range(projections):
         view = start + local_view
@@ -1962,17 +2001,16 @@ def type6_backward(self: Any, y: Any, output: Any, volume: int, subset: int, tim
         projection = data[local_view]
         if int(projection.shape[0]) != nz or int(projection.shape[1]) != ny:
             projection = ops.resize(projection, (nz, ny))
-        depth_shift = int(self.blurPlanes[view])
-        retained_planes = max(1, nx - max(depth_shift, 0))
-        smeared = ops.smear(projection, nx) / retained_planes
+        depth_shift = int(_type6_volume_view_value(self, 'blurPlanes', volume, view))
+        smeared = ops.smear(projection, nx) * _type6_path_weight(self, volume, view, nx)
         if attenuation is not None:
             attenuation_rotated = ops.rotate(attenuation, angle)
             attenuation_rotated = ops.shift_image_y(
-                attenuation_rotated, -int(self.blurPlanes2[view])
+                attenuation_rotated, -int(_type6_volume_view_value(self, 'blurPlanes2', volume, view))
             )
             smeared = ops.attenuation(smeared, attenuation_rotated, float(self.dx[volume]))
         rotated = ops.blur(smeared, ops.shift_kernel(kernel, depth_shift, nx))
-        rotated = ops.shift_image_y(rotated, int(self.blurPlanes2[view]))
+        rotated = ops.shift_image_y(rotated, int(_type6_volume_view_value(self, 'blurPlanes2', volume, view)))
         ops.add_to(image, ops.rotate(rotated, -angle))
         if (local_view + 1) % 16 == 0:
             ops.synchronize(ops.device(y))

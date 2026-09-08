@@ -64,11 +64,12 @@ class projectorClass:
     dScaleZ = np.empty(0, dtype = np.float32)
     kerroin = np.empty(0, dtype = np.float32)
     angles: npt.NDArray[np.float32] = np.empty(0, dtype = np.float32)
-    blurPlanes: npt.NDArray[np.int32] = np.empty(0, dtype = np.int32)
-    blurPlanes2: npt.NDArray[np.int32] = np.empty(0, dtype = np.int32)
-    blurPlanes2Linear: npt.NDArray[np.float32] = np.empty(0, dtype = np.float32)
+    blurPlanes: npt.NDArray[np.int32] = np.empty((0, 0), dtype = np.int32)
+    blurPlanes2: npt.NDArray[np.int32] = np.empty((0, 0), dtype = np.int32)
+    blurPlanes2Linear: npt.NDArray[np.float32] = np.empty((0, 0), dtype = np.float32)
     radiusPerProj: npt.NDArray[np.float32] = np.empty(0, dtype = np.float32)
     gFilter = np.empty(0, dtype = np.float32)
+    type6TotalLength: npt.NDArray[np.float32] = np.empty(0, dtype = np.float32)
     filterIm = np.empty(0, dtype = np.float32)
     filter0 = np.empty(0, dtype = np.float32)
     filter2 = np.empty(0, dtype = np.float32)
@@ -1088,7 +1089,11 @@ class projectorClass:
             SPECTParameters(self)
         if self.projector_type in (6, 16, 26, 61, 62, 66):
             if self.subsets > 1 and (self.subsetType == 8 or self.subsetType == 9 or self.subsetType == 10 or self.subsetType == 11):
-                geometry_fields = ('angles', 'swivelAngles', 'radiusPerProj', 'blurPlanes', 'blurPlanes2', 'blurPlanes2Linear')
+                geometry_fields = (
+                    'angles', 'swivelAngles', 'radiusPerProj',
+                    'blurPlanes', 'blurPlanes2', 'blurPlanes2Linear',
+                    'type6TotalLength',
+                )
                 if isinstance(self.index, list):
                     projection_counts = np.asarray(self.nProjectionsPerFrame, dtype=np.int64).reshape(-1)
                     frame_offsets = np.concatenate(([0], np.cumsum(projection_counts, dtype=np.int64)))
@@ -1096,15 +1101,20 @@ class projectorClass:
                         values = np.asarray(getattr(self, field))
                         reordered = []
                         for timestep in range(self.Nt):
-                            frame_values = values[frame_offsets[timestep] : frame_offsets[timestep + 1]]
-                            reordered.append(frame_values[self.index[timestep]])
-                        setattr(self, field, np.concatenate(reordered))
+                            if values.ndim == 2:
+                                frame_values = values[:, frame_offsets[timestep] : frame_offsets[timestep + 1]]
+                                reordered.append(frame_values[:, self.index[timestep]])
+                            else:
+                                frame_values = values[frame_offsets[timestep] : frame_offsets[timestep + 1]]
+                                reordered.append(frame_values[self.index[timestep]])
+                        setattr(self, field, np.concatenate(reordered, axis=1 if values.ndim == 2 else 0))
                     self.projectionFrameOffsets = np.concatenate(
                         ([0], np.cumsum(projection_counts, dtype=np.int64))
                     )
                 else:
                     for field in geometry_fields:
-                        setattr(self, field, np.asarray(getattr(self, field))[self.index])
+                        values = np.asarray(getattr(self, field))
+                        setattr(self, field, values[:, self.index] if values.ndim == 2 else values[self.index])
             #self.gFilter = self.gFilter.ravel('F').astype(dtype=np.float32)
         ## This part is used when the observation matrix is calculated on-the-fly
 
@@ -1790,6 +1800,12 @@ class projectorClass:
         nx = self.Nx
         ny = self.Ny
         nz = self.Nz
+        if self.projector_type in (6, 16, 26, 61, 62, 66):
+            # Preserve the unsplit physical field for the type-6 total-ray
+            # denominator.  EFOV decomposition below replaces FOVa_x/Nx by
+            # per-volume values, which must not redefine that denominator.
+            self.type6FullFOVaX = float(np.asarray(self.FOVa_x).reshape(-1)[0])
+            self.type6FullNx = int(np.asarray(nx).reshape(-1)[0])
         self.NxFull = nx
         self.NyFull = ny
         self.NzFull = nz
