@@ -1489,7 +1489,13 @@ DEVICE void extendRayToEllipse(
     const FLOAT3 ellipseRadii,
     const FLOAT ellipsePower
 ) {
+#ifdef CUPY_HIP_FINITE_ELLIPSE_POWER
+    // CuPy stages the public infinity sentinel as a finite value; this
+    // comparison is safe under hipRTC's finite-math assumptions.
+    if (ellipsePower > 1.0e20f) {
+#else
     if (ISINF(ellipsePower)) {
+#endif
         const FLOAT cx = ellipseCenter.x;
         const FLOAT cy = ellipseCenter.y;
         const FLOAT cz = ellipseCenter.z;

@@ -357,7 +357,7 @@ def initProjector(self):
                 self.use_64bit_atomics = False
                 self.use_32bit_atomics = False
             if cupyROCm():
-                bOpt = ('-DHIP','-DPYTHON',)
+                bOpt = ('-DHIP','-DCUPY_HIP_FINITE_ELLIPSE_POWER','-DPYTHON',)
             else:
                 bOpt = ('-DCUDA','-DPYTHON',)
         else:
@@ -742,11 +742,18 @@ def initProjector(self):
                     mod = cp.RawModule(code=lines, options=bOpt)
                     self.knlPSF = mod.get_function('Convolution3D_f')
                     self.d_gaussPSF = cp.asarray(self.gaussK.ravel('F'))
+
+                # ``inf`` is the public box-support value.  hipRTC receives
+                # a finite sentinel instead, because ``isinf`` is unreliable
+                # for a runtime scalar when HIP fast-math is enabled.
+                ellipse_power_kernel = self.ellipsePower
+                if cupyROCm() and np.isinf(ellipse_power_kernel):
+                    ellipse_power_kernel = np.finfo(np.float32).max
                     
                 if self.FPType in [1, 2, 3]:
                     self.kIndF = (cp.float32(self.global_factor), cp.float32(self.epps), cp.uint32(self.nRowsD), cp.uint32(self.det_per_ring), cp.float32(self.sigma_x),)
                     if self.SPECT:
-                        self.kIndF += (self.d_rayShiftsDetector, self.d_rayShiftsSource, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.ellipseCenterX), cp.float32(self.ellipseCenterY), cp.float32(self.ellipseCenterZ), cp.float32(self.ellipseRadiusX), cp.float32(self.ellipseRadiusY), cp.float32(self.ellipseRadiusZ), cp.float32(self.ellipsePower),)
+                        self.kIndF += (self.d_rayShiftsDetector, self.d_rayShiftsSource, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.ellipseCenterX), cp.float32(self.ellipseCenterY), cp.float32(self.ellipseCenterZ), cp.float32(self.ellipseRadiusX), cp.float32(self.ellipseRadiusY), cp.float32(self.ellipseRadiusZ), cp.float32(ellipse_power_kernel),)
                     self.kIndF += (cp.float32(self.dPitchX),cp.float32(self.dPitchY),)
                 elif self.FPType == 4:
                     self.kIndF = (cp.uint32(self.nRowsD), cp.uint32(self.nColsD), cp.float32(self.dPitchX),cp.float32(self.dPitchY),cp.float32(self.dL),cp.float32(self.global_factor),)
@@ -779,7 +786,7 @@ def initProjector(self):
                 if self.BPType in [1, 2, 3]:
                     self.kIndB = (cp.float32(self.global_factor), cp.float32(self.epps), cp.uint32(self.nRowsD), cp.uint32(self.det_per_ring), cp.float32(self.sigma_x),)
                     if self.SPECT:
-                        self.kIndB += (self.d_rayShiftsDetector, self.d_rayShiftsSource, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.ellipseCenterX), cp.float32(self.ellipseCenterY), cp.float32(self.ellipseCenterZ), cp.float32(self.ellipseRadiusX), cp.float32(self.ellipseRadiusY), cp.float32(self.ellipseRadiusZ), cp.float32(self.ellipsePower),)
+                        self.kIndB += (self.d_rayShiftsDetector, self.d_rayShiftsSource, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.ellipseCenterX), cp.float32(self.ellipseCenterY), cp.float32(self.ellipseCenterZ), cp.float32(self.ellipseRadiusX), cp.float32(self.ellipseRadiusY), cp.float32(self.ellipseRadiusZ), cp.float32(ellipse_power_kernel),)
                     self.kIndB += (cp.float32(self.dPitchX),cp.float32(self.dPitchY),)
                     if self.BPType in [2, 3]:
                         if self.BPType == 2:
