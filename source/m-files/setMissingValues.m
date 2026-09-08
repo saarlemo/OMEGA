@@ -268,6 +268,30 @@ end
 if ~isfield(options, 'oOffsetZ')
     options.oOffsetZ = 0;
 end
+if ~isfield(options, 'ellipseCenterX')
+    options.ellipseCenterX = 0;
+end
+if ~isfield(options, 'ellipseCenterY')
+    options.ellipseCenterY = 0;
+end
+if ~isfield(options, 'ellipseCenterZ')
+    options.ellipseCenterZ = 0;
+end
+if ~isfield(options, 'ellipseRadiusX') || ~isfield(options, 'ellipseRadiusY') || ~isfield(options, 'ellipseRadiusZ')
+    options.ellipseRadiusX = options.FOVa_x / 2;
+    options.ellipseRadiusY = options.FOVa_y / 2;
+    options.ellipseRadiusZ = options.axial_fov / 2;
+    options.ellipseParametersDerived = true;
+end
+if ~isfield(options, 'ellipsePower')
+    options.ellipsePower = Inf;
+end
+if ~isfield(options, 'ellipseCenterOffsetApplied') || ~options.ellipseCenterOffsetApplied
+    options.ellipseCenterX = options.ellipseCenterX + options.oOffsetX;
+    options.ellipseCenterY = options.ellipseCenterY + options.oOffsetY;
+    options.ellipseCenterZ = options.ellipseCenterZ + options.oOffsetZ;
+    options.ellipseCenterOffsetApplied = true;
+end
 if ~isfield(options, 'tube_width_z')
     options.tube_width_z = 0;
 end
@@ -1068,6 +1092,12 @@ end
 if ~isfield(options, 'colL') % SPECT collimator hole length
     options.colL = 1;
 end
+if ~isfield(options, 'colLxy') % SPECT transaxial collimator hole length
+    options.colLxy = options.colL;
+end
+if ~isfield(options, 'colLz') % SPECT axial collimator hole length
+    options.colLz = options.colL;
+end
 if ~isfield(options, 'colD') % SPECT collimator distance from detector surface
     options.colD = 1;
 end
@@ -1088,6 +1118,9 @@ if ~isfield(options, 'rayShiftsSource')
 end
 if ~isfield(options, 'nHeads') || isempty(options.nHeads)
     options.nHeads = 1;
+end
+if options.SPECT && (~isfield(options, 'DetectorVector') || isempty(options.DetectorVector))
+    options.DetectorVector = zeros(options.nProjections, 1, 'uint32');
 end
 if ~isfield(options, 'iR')
     options.iR = 1;

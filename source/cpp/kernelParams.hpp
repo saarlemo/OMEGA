@@ -64,8 +64,9 @@ struct ScalarKernelParams { // Kernel scalar values that do not change with time
     float Vmax;
     CL_UINT32 rings;
     float helicalRadius;
-    CL_FLOAT3 totalFOVmin;
-    CL_FLOAT3 totalFOVmax;
+    CL_FLOAT3 ellipseCenter;
+    CL_FLOAT3 ellipseRadii;
+    float ellipsePower;
     // Dynamic (change per subset or timestep)
     CL_UINT3 d_N;
     CL_FLOAT3 b;

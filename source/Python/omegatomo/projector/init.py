@@ -208,9 +208,9 @@ def initProjector(self):
         self.trIndex = self.trIndex.ravel('F')
         self.axIndex = self.axIndex.ravel('F')
 
-    if self.projector_type in [1, 11, 14, 15, 12, 13]:
+    if self.projector_type in [1, 11, 14, 15, 12, 13, 16]:
         self.FPType = 1
-    elif self.projector_type in [2, 21, 22, 23, 24, 25]:
+    elif self.projector_type in [2, 21, 22, 23, 24, 25, 26]:
         self.FPType = 2
     elif self.projector_type in [3, 31, 32, 33, 34, 35]:
         self.FPType = 3
@@ -218,13 +218,13 @@ def initProjector(self):
         self.FPType = 4
     elif self.projector_type in [5, 51, 52, 53, 54, 55]:
         self.FPType = 5
-    elif self.projector_type == 6:
+    elif self.projector_type in [6, 61, 62, 66]:
         self.FPType = 6
     else:
         raise ValueError('Invalid forward projector!')
-    if self.projector_type in [1, 11, 21, 31, 41, 51]:
+    if self.projector_type in [1, 11, 21, 31, 41, 51, 61]:
         self.BPType = 1
-    elif self.projector_type in [2, 12, 22, 32, 42, 52]:
+    elif self.projector_type in [2, 12, 22, 32, 42, 52, 62]:
         self.BPType = 2
     elif self.projector_type in [3, 13, 23, 33, 43, 53]:
         self.BPType = 3
@@ -232,7 +232,7 @@ def initProjector(self):
         self.BPType = 4
     elif self.projector_type in [5, 15, 25, 35, 45, 55]:
         self.BPType = 5
-    elif self.projector_type == 6:
+    elif self.projector_type in [6, 16, 26, 66]:
         self.BPType = 6
     else:
         raise ValueError('Invalid backprojector!')
@@ -247,10 +247,12 @@ def initProjector(self):
             self.useImages = False
     # if self.useAF == False and (self.FPType == 5 or self.BPType == 5):
     #     raise ValueError('Branchless distance-driven (projector type 5) can only be used with Arrayfire!')
-    if (self.useAF == False and self.useCuPy == False) and self.projector_type == 6:
-        raise ValueError('Projector type 6 can only be used with Arrayfire (OpenCL) or CuPy (CUDA)!')
+    if (self.useAF == False and self.useCuPy == False and not self.useMetal) and self.projector_type in (6, 66):
+        raise ValueError('Projector type 6 can only be used with Arrayfire (OpenCL), CuPy (CUDA), or PyTorch MPS!')
+    if self.projector_type in (16, 26, 61, 62) and not self.useMetal:
+        raise ValueError('Hybrid projector types 16, 26, 61, and 62 are supported only by the PyTorch MPS custom-operator path!')
         
-    if not self.projector_type == 6:
+    if self.FPType != 6 or self.BPType != 6:
         fPath = os.path.dirname( __file__ )
         if os.path.exists(os.path.join(fPath, '..', 'util', 'usingPyPi.py')):
             headerDir = os.path.abspath(os.path.join(os.path.dirname( __file__ ), '..', 'opencl')) + "/"
@@ -258,6 +260,8 @@ def initProjector(self):
             headerDir = os.path.abspath(os.path.join(os.path.dirname( __file__ ), '..', '..', '..', 'opencl')) + "/"
         with open(headerDir + 'general_opencl_functions.h', encoding="utf8") as f:
             hlines = f.read()
+        linesFP = None
+        linesBP = None
         if self.FPType in [1, 2, 3]:
             with open(headerDir + 'projectorType123.cl', encoding="utf8") as f:
                 linesFP = f.read()
@@ -353,7 +357,7 @@ def initProjector(self):
                 self.use_64bit_atomics = False
                 self.use_32bit_atomics = False
             if cupyROCm():
-                bOpt = ('-DHIP','-DPYTHON',)
+                bOpt = ('-DHIP','-DCUPY_HIP_FINITE_ELLIPSE_POWER','-DPYTHON',)
             else:
                 bOpt = ('-DCUDA','-DPYTHON',)
         else:
@@ -394,15 +398,15 @@ def initProjector(self):
                 hlines2 = f.read()
             if self.FPType in [2, 3]:
                 linesFP = hlines + hlines2 + linesFP
-            else:
+            elif linesFP is not None:
                 linesFP = hlines + linesFP
             if self.BPType in [2, 3]:
                 linesBP = hlines + hlines2 + linesBP
-            else:
+            elif linesBP is not None:
                 linesBP = hlines + linesBP
         else:
-            linesFP = hlines + linesFP
-            linesBP = hlines + linesBP
+            linesFP = hlines + linesFP if linesFP is not None else None
+            linesBP = hlines + linesBP if linesBP is not None else None
         # if self.FPType == 3 or self.BPType == 3:
         #     bOpt += ('-DVOL',)
         if self.useMaskFP:
@@ -547,20 +551,28 @@ def initProjector(self):
             if self.meanBP:
                 bOptBP += ('-DMEANDISTANCEBP',)
     else:
+        headerDir = None
+        linesFP = None
+        linesBP = None
+        bOptFP = ()
+        bOptBP = ()
         if self.useCUDA:
             if self.useTorch:
                 #self.gFilter = np.ascontiguousarray(self.gFilter)
                 #self.gFilter = np.transpose(self.gFilter, (1, 0, 2))
-                self.d_gFilter = torch.tensor(self.gFilter, device='cuda')
-                self.angles = np.degrees(self.angles)
-                self.swivelAngles = np.degrees(self.swivelAngles)
+                if isinstance(self.gFilter, (list, tuple)) and len(self.gFilter):
+                    self.d_gFilter = [torch.tensor(value, device='cuda') for value in self.gFilter]
+                else:
+                    self.d_gFilter = torch.tensor(self.gFilter, device='cuda')
                 #self.d_gFilter = self.d_gFilter.permute(2, 0, 1).unsqueeze(1)
-        else:
-            self.d_gFilter = af.interop.np_to_af_array(self.gFilter)
+        elif not self.useMetal:
+            if isinstance(self.gFilter, (list, tuple)) and len(self.gFilter):
+                self.d_gFilter = [af.interop.np_to_af_array(value) for value in self.gFilter]
+            else:
+                self.d_gFilter = af.interop.np_to_af_array(self.gFilter)
         self.uu = 0
     
     if self.useMetal:
-        # Compile FP + BP
         from omegatomo.projector.mps_backend import init_mps_projector
         init_mps_projector(
             self,
@@ -582,7 +594,7 @@ def initProjector(self):
         self.dSize = [None] * (self.nMultiVolumes + 1)
         self.d_Scale = [None] * (self.nMultiVolumes + 1)
         self.d_Scale4 = [None] * (self.nMultiVolumes + 1)
-        if self.projector_type != 6:
+        if self.FPType != 6 or self.BPType != 6:
             if self.useCuPy:
                 # if self.FPType == 5:
                 #     raise ValueError('Not yet supported')
@@ -736,11 +748,18 @@ def initProjector(self):
                     mod = cp.RawModule(code=lines, options=bOpt)
                     self.knlPSF = mod.get_function('Convolution3D_f')
                     self.d_gaussPSF = cp.asarray(self.gaussK.ravel('F'))
+
+                # ``inf`` is the public box-support value.  hipRTC receives
+                # a finite sentinel instead, because ``isinf`` is unreliable
+                # for a runtime scalar when HIP fast-math is enabled.
+                ellipse_power_kernel = self.ellipsePower
+                if cupyROCm() and np.isinf(ellipse_power_kernel):
+                    ellipse_power_kernel = np.finfo(np.float32).max
                     
                 if self.FPType in [1, 2, 3]:
                     self.kIndF = (cp.float32(self.global_factor), cp.float32(self.epps), cp.uint32(self.nRowsD), cp.uint32(self.det_per_ring), cp.float32(self.sigma_x),)
                     if self.SPECT:
-                        self.kIndF += (self.d_rayShiftsDetector, self.d_rayShiftsSource, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.totalFOVxmin), cp.float32(self.totalFOVymin), cp.float32(self.totalFOVzmin), cp.float32(self.totalFOVxmax), cp.float32(self.totalFOVymax), cp.float32(self.totalFOVzmax),)
+                        self.kIndF += (self.d_rayShiftsDetector, self.d_rayShiftsSource, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.ellipseCenterX), cp.float32(self.ellipseCenterY), cp.float32(self.ellipseCenterZ), cp.float32(self.ellipseRadiusX), cp.float32(self.ellipseRadiusY), cp.float32(self.ellipseRadiusZ), cp.float32(ellipse_power_kernel),)
                     self.kIndF += (cp.float32(self.dPitchX),cp.float32(self.dPitchY),)
                 elif self.FPType == 4:
                     self.kIndF = (cp.uint32(self.nRowsD), cp.uint32(self.nColsD), cp.float32(self.dPitchX),cp.float32(self.dPitchY),cp.float32(self.dL),cp.float32(self.global_factor),)
@@ -773,7 +792,7 @@ def initProjector(self):
                 if self.BPType in [1, 2, 3]:
                     self.kIndB = (cp.float32(self.global_factor), cp.float32(self.epps), cp.uint32(self.nRowsD), cp.uint32(self.det_per_ring), cp.float32(self.sigma_x),)
                     if self.SPECT:
-                        self.kIndB += (self.d_rayShiftsDetector, self.d_rayShiftsSource, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.totalFOVxmin), cp.float32(self.totalFOVymin), cp.float32(self.totalFOVzmin), cp.float32(self.totalFOVxmax), cp.float32(self.totalFOVymax), cp.float32(self.totalFOVzmax),)
+                        self.kIndB += (self.d_rayShiftsDetector, self.d_rayShiftsSource, cp.float32(self.coneOfResponseStdCoeffA), cp.float32(self.coneOfResponseStdCoeffB), cp.float32(self.coneOfResponseStdCoeffC), cp.float32(self.ellipseCenterX), cp.float32(self.ellipseCenterY), cp.float32(self.ellipseCenterZ), cp.float32(self.ellipseRadiusX), cp.float32(self.ellipseRadiusY), cp.float32(self.ellipseRadiusZ), cp.float32(ellipse_power_kernel),)
                     self.kIndB += (cp.float32(self.dPitchX),cp.float32(self.dPitchY),)
                     if self.BPType in [2, 3]:
                         if self.BPType == 2:
@@ -801,7 +820,7 @@ def initProjector(self):
             else:
                 raise ValueError('Unsupported selection. Note that PyCUDA is no longer supported!')
     else:
-        if self.projector_type != 6:
+        if self.FPType != 6 or self.BPType != 6:
             
             self.no_norm = 1
             self.mSize = self.nRowsD * self.nColsD * self.nProjections
@@ -997,17 +1016,19 @@ def initProjector(self):
                     self.kIndF += 1
                     self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.coneOfResponseStdCoeffC))
                     self.kIndF += 1
-                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.totalFOVxmin))
+                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.ellipseCenterX))
                     self.kIndF += 1
-                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.totalFOVymin))
+                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.ellipseCenterY))
                     self.kIndF += 1
-                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.totalFOVzmin))
+                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.ellipseCenterZ))
                     self.kIndF += 1
-                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.totalFOVxmax))
+                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.ellipseRadiusX))
                     self.kIndF += 1
-                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.totalFOVymax))
+                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.ellipseRadiusY))
                     self.kIndF += 1
-                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.totalFOVzmax))
+                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.ellipseRadiusZ))
+                    self.kIndF += 1
+                    self.knlF.set_arg(self.kIndF, (cl.cltypes.float)(self.ellipsePower))
                     self.kIndF += 1
                 self.knlF.set_arg(self.kIndF, self.d_dPitch)
                 self.kIndF += 1
@@ -1085,17 +1106,19 @@ def initProjector(self):
                     self.kIndB += 1
                     self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.coneOfResponseStdCoeffC))
                     self.kIndB += 1
-                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.totalFOVxmin))
+                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.ellipseCenterX))
                     self.kIndB += 1
-                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.totalFOVymin))
+                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.ellipseCenterY))
                     self.kIndB += 1
-                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.totalFOVzmin))
+                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.ellipseCenterZ))
                     self.kIndB += 1
-                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.totalFOVxmax))
+                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.ellipseRadiusX))
                     self.kIndB += 1
-                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.totalFOVymax))
+                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.ellipseRadiusY))
                     self.kIndB += 1
-                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.totalFOVzmax))
+                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.ellipseRadiusZ))
+                    self.kIndB += 1
+                    self.knlB.set_arg(self.kIndB, (cl.cltypes.float)(self.ellipsePower))
                     self.kIndB += 1
                 self.knlB.set_arg(self.kIndB, self.d_dPitch)
                 self.kIndB += 1

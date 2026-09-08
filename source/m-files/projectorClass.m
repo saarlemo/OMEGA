@@ -842,13 +842,29 @@ classdef projectorClass
                 ];
             end
 
-            obj.param.totalFOVxmin = -FOV(1) / 2  + obj.param.oOffsetX + obj.param.eFOVShift(1);
-            obj.param.totalFOVymin = -FOV(2) / 2  + obj.param.oOffsetY + obj.param.eFOVShift(2);
-            obj.param.totalFOVzmin = -FOV(3) / 2  + obj.param.oOffsetZ + obj.param.eFOVShift(3);
-            obj.param.totalFOVxmax = FOV(1) / 2 + obj.param.oOffsetX  + obj.param.eFOVShift(1);
-            obj.param.totalFOVymax = FOV(2) / 2 + obj.param.oOffsetY  + obj.param.eFOVShift(2);
-            obj.param.totalFOVzmax = FOV(3) / 2 + obj.param.oOffsetZ  + obj.param.eFOVShift(3);
-
+            if obj.param.SPECT
+                % Share the complete shifted FOV across all resolution volumes.
+                if isfield(obj.param, 'ellipseParametersDerived') && obj.param.ellipseParametersDerived
+                    obj.param.ellipseRadiusX = FOV(1) / 2;
+                    obj.param.ellipseRadiusY = FOV(2) / 2;
+                    obj.param.ellipseRadiusZ = FOV(3) / 2;
+                    previousShift = [0 0 0];
+                    if isfield(obj.param, 'ellipseEFOVShift')
+                        previousShift = obj.param.ellipseEFOVShift;
+                    end
+                    obj.param.ellipseCenterX = obj.param.ellipseCenterX + obj.param.eFOVShift(1) - previousShift(1);
+                    obj.param.ellipseCenterY = obj.param.ellipseCenterY + obj.param.eFOVShift(2) - previousShift(2);
+                    obj.param.ellipseCenterZ = obj.param.ellipseCenterZ + obj.param.eFOVShift(3) - previousShift(3);
+                    obj.param.ellipseEFOVShift = obj.param.eFOVShift;
+                end
+                if ~(obj.param.ellipsePower == 2 || obj.param.ellipsePower == Inf)
+                    error('ellipsePower must be 2 or positive infinity.');
+                end
+                radii = [obj.param.ellipseRadiusX obj.param.ellipseRadiusY obj.param.ellipseRadiusZ];
+                if any(~isfinite(radii)) || any(radii <= 0)
+                    error('Ellipse radii must be finite and positive.');
+                end
+            end
 
             if obj.param.use_raw_data
                 obj.param.LL = form_detector_pairs_raw(obj.param.rings, obj.param.det_per_ring);

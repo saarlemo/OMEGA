@@ -165,15 +165,17 @@ void projectorType123(
     const float coneOfResponseStdCoeffB,
     const float coneOfResponseStdCoeffC,
 #if defined(PYTHON)
-    const float totalFOVxmin,
-    const float totalFOVymin,
-    const float totalFOVzmin,
-    const float totalFOVxmax,
-    const float totalFOVymax,
-    const float totalFOVzmax,
+    const float ellipseCenterX,
+    const float ellipseCenterY,
+    const float ellipseCenterZ,
+    const float ellipseRadiusX,
+    const float ellipseRadiusY,
+    const float ellipseRadiusZ,
+    const float ellipsePower,
 #else
-    const float3 totalFOVmin,
-    const float3 totalFOVmax,
+    const float3 ellipseCenter,
+    const float3 ellipseRadii,
+    const float ellipsePower,
 #endif
 #endif
 #if defined(PYTHON)
@@ -334,8 +336,8 @@ void projectorType123(
 	const FLOAT3 b = make_float3(bx, by, bz);
 	const FLOAT3 d_bmax = make_float3(d_bmaxx, d_bmaxy, d_bmaxz);
 #if defined(SPECT)
-    const FLOAT3 totalFOVmin = make_float3(totalFOVxmin, totalFOVymin, totalFOVzmin);
-    const FLOAT3 totalFOVmax = make_float3(totalFOVxmax, totalFOVymax, totalFOVzmax);
+    const FLOAT3 ellipseCenter = make_float3(ellipseCenterX, ellipseCenterY, ellipseCenterZ);
+    const FLOAT3 ellipseRadii = make_float3(ellipseRadiusX, ellipseRadiusY, ellipseRadiusZ);
 #endif
 #endif
 #if defined(SPECT) && (defined(MASKFPBYDETECTOR) || defined(NORMBYDETECTOR))
@@ -452,7 +454,25 @@ void projectorType123(
 #if defined(CT) && !defined(LISTMODE) && !defined(PET) // CT data
 	getDetectorCoordinatesCT(d_xy, d_z, &s, &d, i, d_size_x, d_sizey, crystalSize);
 #elif defined(SPECT) && (!defined(LISTMODE) || defined(SENS)) && !defined(PET) // SPECT data
-	getDetectorCoordinatesSPECT(d_xy, d_z, &s, &d, i, d_size_x, d_sizey, crystalSize, d_rayShiftsDetector, d_rayShiftsSource, d_detectorVector, lor, totalFOVmin, totalFOVmax);
+#if defined(ORTH)
+    FLOAT3 collimatorOrigin;
+#endif
+	getDetectorCoordinatesSPECT(d_xy, d_z, &s, &d, i, d_size_x, d_sizey, crystalSize, d_rayShiftsDetector, d_rayShiftsSource, d_detectorVector, lor, ellipseCenter, ellipseRadii, ellipsePower
+#if defined(ORTH)
+        , &collimatorOrigin
+#endif
+    );
+#if defined(ORTH)
+    const FLOAT spectNormalizationLength = LENGTH(d - s);
+    if (spectNormalizationLength <= FLOAT_ZERO) {
+#ifdef N_RAYS
+        continue;
+#else
+        return;
+#endif
+    }
+    s = collimatorOrigin;
+#endif
 #elif defined(LISTMODE) && !defined(SENS) // Listmode data
 #if defined(INDEXBASED)
 	getDetectorCoordinatesListmode(d_xy, d_z, trIndex, axIndex, &s, &d, idx
@@ -552,6 +572,8 @@ void projectorType123(
 	// SPECT ODRT has finite Gaussian support around the central ray.  Use the
 	// total FOV as the physical admission box, but only traverse voxels in this
 	// local volume so multiresolution subvolumes keep their own indexing.
+	const FLOAT3 totalFOVmin = ellipseCenter - ellipseRadii;
+	const FLOAT3 totalFOVmax = ellipseCenter + ellipseRadii;
 	const FLOAT supportRadius = spectOrthSupportRadius(s, diff, totalFOVmin, totalFOVmax, coneOfResponseStdCoeffA, coneOfResponseStdCoeffB, coneOfResponseStdCoeffC);
 	const FLOAT3 supportVec = CMFLOAT3(supportRadius, supportRadius, supportRadius);
 	FLOAT totalTmin = FLOAT_ZERO;
@@ -565,13 +587,9 @@ void projectorType123(
 			if (localTmax >= localTmin) {
 				temp = FLOAT_ONE;
 #if defined(TOTLENGTH)
-				// getDetectorCoordinatesSPECT() extends the ray to the total
-				// FOV before L is computed.  The support-expanded interval is
-				// only for finding voxels whose Gaussian support overlaps the
-				// current volume; including totalTmax here would normalize by
-				// a longer, artificial ray and would scale each resolution
-				// volume differently.
-				temp /= FMAX(L, 1.0e-6f);
+				// Normalize by the shared clipped chord, independent of the
+				// local voxel grid and the collimator origin used for blur.
+				temp /= FMAX(spectNormalizationLength, 1.0e-6f);
 #endif
 				temp *= d_d.x * d_d.y * d_d.z;
 #ifdef NORM
@@ -835,7 +853,7 @@ void projectorType123(
 #endif
 #elif defined(SPECT)
 #if defined(TOTLENGTH)
-        temp /= LENGTH(diff);
+        temp /= spectNormalizationLength;
 #endif
         temp *= d_d.x * d_d.y * d_d.z;
 #endif
@@ -1143,7 +1161,7 @@ void projectorType123(
 #if defined(SPECT) && !defined(VOL)
         temp = FLOAT_ONE;
 #if defined(TOTLENGTH)
-        temp /= LENGTH(diff);
+        temp /= spectNormalizationLength;
 #endif
         temp *= d_d.x * d_d.y * d_d.z;
 #endif
@@ -1406,7 +1424,7 @@ void projectorType123(
 #if defined(SPECT) && defined(ORTH) && !defined(VOL)
             temp = FLOAT_ONE;
 #if defined(TOTLENGTH)
-            temp /= LENGTH(diff);
+            temp /= spectNormalizationLength;
 #endif
             temp *= d_d.x * d_d.y * d_d.z;
 #endif
